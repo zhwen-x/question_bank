@@ -17,6 +17,7 @@ MODULES = [
     "qbank.core.content.math",
     "qbank.core.content.text",
     "qbank.core.content.render",
+    "qbank.core.services.dedup",
 ]
 
 

@@ -274,10 +274,11 @@ class Question(Base, TimestampMixin):
     source: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     author: Mapped[str] = mapped_column(String(100), nullable=False, default="")
 
-    #: 规范化题面的精确指纹，用于「完全重复」判定
+    #: 规范化题面的精确指纹，用于「完全重复」判定。
+    #: 近似重复**不存指纹**——实测任何表面相似度阈值都分不开「换个数字的同一道题」
+    #: 和「正确↔错误的不同题」，所以相似候选改为查询时在缩小后的候选集上实时
+    #: 计算（见 qbank.core.services.dedup）。
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    #: simhash，用于「改了几个字」的近似重复判定
-    simhash: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 来源文件里的稳定标识，让同一文件重复导入能认出是同一道题
     external_id: Mapped[str] = mapped_column(String(200), nullable=False, default="")
 
@@ -309,7 +310,6 @@ class Question(Base, TimestampMixin):
         Index("ix_question_chapter", "chapter_id", "deleted_at"),
         Index("ix_question_parent", "parent_id", "sort_order"),
         Index("ix_question_fingerprint", "fingerprint"),
-        Index("ix_question_simhash", "simhash"),
         Index("ix_question_external", "course_id", "external_id"),
         CheckConstraint("score >= 0", name="ck_question_score_non_negative"),
         CheckConstraint("difficulty BETWEEN 1 AND 5", name="ck_question_difficulty_range"),

@@ -211,7 +211,6 @@ def upgrade() -> None:
         sa.Column("source", sa.String(length=300), nullable=False),
         sa.Column("author", sa.String(length=100), nullable=False),
         sa.Column("fingerprint", sa.String(length=64), nullable=False),
-        sa.Column("simhash", sa.Integer(), nullable=False),
         sa.Column("external_id", sa.String(length=200), nullable=False),
         sa.Column("revision", sa.Integer(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
@@ -245,7 +244,6 @@ def upgrade() -> None:
         batch_op.create_index("ix_question_external", ["course_id", "external_id"], unique=False)
         batch_op.create_index("ix_question_fingerprint", ["fingerprint"], unique=False)
         batch_op.create_index("ix_question_parent", ["parent_id", "sort_order"], unique=False)
-        batch_op.create_index("ix_question_simhash", ["simhash"], unique=False)
 
     op.create_table(
         "paper_item",
@@ -391,7 +389,6 @@ def downgrade() -> None:
 
     op.drop_table("paper_item")
     with op.batch_alter_table("question", schema=None) as batch_op:
-        batch_op.drop_index("ix_question_simhash")
         batch_op.drop_index("ix_question_parent")
         batch_op.drop_index("ix_question_fingerprint")
         batch_op.drop_index("ix_question_external")
