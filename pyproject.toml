@@ -22,7 +22,6 @@ dependencies = [
   "mdit-py-plugins>=0.4",
   "nh3>=0.2.17",          # HTML 白名单 sanitize（Rust 实现，无系统依赖）
   "latex2mathml>=3.77",   # LaTeX→MathML，供自包含 HTML 导出（零 JS、零字体）
-  "jieba>=0.42.1",        # 中文分词，喂给 FTS5
   "Pillow>=10.3",         # 图片尺寸探测与压缩
   # 模板与格式转换
   "Jinja2>=3.1.4",
@@ -97,7 +96,7 @@ plugins = ["pydantic.mypy"]
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["jieba.*", "pypandoc.*", "webview.*", "nh3.*", "mdit_py_plugins.*"]
+module = ["pypandoc.*", "webview.*", "nh3.*", "mdit_py_plugins.*", "latex2mathml.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------- pytest

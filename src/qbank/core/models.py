@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, ClassVar
 
 from sqlalchemy import (
@@ -91,6 +92,60 @@ class UtcDateTime(TypeDecorator[datetime]):
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+
+class StrEnumType(TypeDecorator[Any]):
+    """以文本存储的枚举列。
+
+    **为什么需要它**：把列声明成 ``mapped_column(String(20))`` 而注解写成
+    ``Mapped[TagCategory]`` 时，SQLAlchemy 并不会在读出时把字符串转回枚举——
+    拿到的是裸 ``str``，于是 ``tag.category.label`` 直接 AttributeError。
+    靠调用方到处写 ``TagCategory(tag.category)`` 能绕过去，但那是个陷阱：
+    漏一处就炸一处，而且只在运行时才发现。
+
+    DDL 层面仍然是 ``VARCHAR(n)``，所以不影响已有迁移。
+    """
+
+    # impl 必须是**类级**变量（SQLAlchemy 在 TypeDecorator.__init__ 里断言这一点）；
+    # 长度通过 super().__init__ 转交给 String 的构造函数
+    impl = String
+    cache_ok = True
+
+    def __init__(self, enum_class: type[Enum], length: int = 32) -> None:
+        self.enum_class = enum_class
+        super().__init__(length=length)
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return str(value.value)
+        # 允许直接写字符串，但必须是合法成员，避免脏值进库
+        return str(self.enum_class(value).value)
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        return None if value is None else self.enum_class(value)
+
+
+class IntEnumType(TypeDecorator[Any]):
+    """以整数存储的枚举列（难度）。整数便于直接参与区间筛选与分布配平。"""
+
+    impl = Integer
+    cache_ok = True
+
+    def __init__(self, enum_class: type[Enum]) -> None:
+        self.enum_class = enum_class
+        super().__init__()
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return int(value.value)
+        return int(self.enum_class(value).value)
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        return None if value is None else self.enum_class(value)
 
 
 class Base(DeclarativeBase):
@@ -178,7 +233,7 @@ class Tag(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     category: Mapped[TagCategory] = mapped_column(
-        String(20), nullable=False, default=TagCategory.KNOWLEDGE
+        StrEnumType(TagCategory, 20), nullable=False, default=TagCategory.KNOWLEDGE
     )
     color: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -259,17 +314,17 @@ class Question(Base, TimestampMixin):
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    type: Mapped[QuestionType] = mapped_column(String(32), nullable=False)
+    type: Mapped[QuestionType] = mapped_column(StrEnumType(QuestionType, 32), nullable=False)
     stem: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     difficulty: Mapped[Difficulty] = mapped_column(
-        Integer, nullable=False, default=Difficulty.MEDIUM
+        IntEnumType(Difficulty), nullable=False, default=Difficulty.MEDIUM
     )
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     est_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[QuestionStatus] = mapped_column(
-        String(16), nullable=False, default=QuestionStatus.DRAFT
+        StrEnumType(QuestionStatus, 16), nullable=False, default=QuestionStatus.DRAFT
     )
     source: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     author: Mapped[str] = mapped_column(String(100), nullable=False, default="")
@@ -348,7 +403,12 @@ class QuestionAnswer(Base, TimestampMixin):
 
 
 class QuestionRevision(Base):
-    """每次编辑前的整题快照，支持回滚与「谁在什么时候改了什么」。"""
+    """每次编辑**前**的整题快照，支持回滚。
+
+    ``revision`` 是快照所代表的版本号（即改动前的版本），``note`` 描述的是
+    紧随其后的那次改动。于是界面上可以直接读成「恢复到『改分值』之前的状态」
+    ——这正是用户想回滚时的思考方式。
+    """
 
     __tablename__ = "question_revision"
 

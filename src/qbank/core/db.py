@@ -8,7 +8,7 @@
 2. 默认的 ``journal_mode=DELETE`` 下读写互斥。改成 WAL 后「一边浏览列表、
    一边后台导入」才不会互相阻塞——这对后续 Web 端尤其重要。
 
-全文索引不走 ORM：索引的是 jieba 分词后的文本，而分词要跑 Python，SQL 触发器
+全文索引不走 ORM：索引的是字符 n-gram 切分后的文本，切分要跑 Python，SQL 触发器
 做不到。因此由 ``SearchService`` 在写题时同步维护（见 :mod:`qbank.core.services.search`）。
 """
 
@@ -30,7 +30,7 @@ from qbank.core.models import Base
 #:
 #: ``question_search`` 只是一个 ``question_id`` ↔ 整型 rowid 的映射：FTS5 表按
 #: rowid 做主键最快，而题目主键是 UUID 文本，所以需要这一层。
-#: ``question_fts`` 存分词后的文本，用 ``unicode61``（原因见 ``content.segment``）。
+#: ``question_fts`` 存切分后的 token 串，用 ``unicode61``（原因见 ``content.segment``）。
 FTS_DDL: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS question_search (

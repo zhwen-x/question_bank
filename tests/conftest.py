@@ -11,8 +11,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from sqlalchemy.orm import Session, sessionmaker
 
 from qbank import config
+from qbank.core.db import init_schema, make_memory_engine, make_session_factory
 
 
 @pytest.fixture(autouse=True)
@@ -25,3 +27,26 @@ def isolate_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     assert paths.root == root.resolve(), "数据目录隔离失效，测试可能污染真实题库"
     yield paths
     config.get_paths.cache_clear()
+
+
+@pytest.fixture
+def session_factory() -> Iterator[sessionmaker[Session]]:
+    """每个测试一个独立的内存库，建好表与 FTS 索引。
+
+    用内存库而非临时文件：快得多，且不会因为 WAL 的 ``-wal``/``-shm`` 残留
+    干扰 tmp_path 的断言。
+    """
+    engine = make_memory_engine()
+    init_schema(engine)
+    try:
+        yield make_session_factory(engine)
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    """直接拿一个会话用。测试结束自动回滚，不必手工清理。"""
+    with session_factory() as active:
+        yield active
+        active.rollback()

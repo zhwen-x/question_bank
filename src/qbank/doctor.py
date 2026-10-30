@@ -17,10 +17,13 @@ from enum import Enum
 
 from qbank.config import get_paths
 
-#: FTS5 trigram 分词器要求查询串 >= 3 字符，2 字中文词（"函数"/"性质"）查不到，
-#: 因此中文检索改走 jieba 预分词 + unicode61。此处把该事实固化为一项检查。
-_CJK_PROBE_TEXT = "二次函数的图像与性质"
-_CJK_PROBE_TERM = "函数"
+#: 中文检索的两个实测坑（见 content.segment）：FTS5 的 trigram 分词器对 2 字
+#: 中文词返回 0 条；jieba 的切分依赖上下文，会让「题在库里却搜不到」。
+#: 现方案是字符一元+二元 n-gram。这里用一条跨越上下文的探针验证它确实可用：
+#: 探针文本里「最短」被夹在更长的串中，而查询词单独出现。
+_CJK_PROBE_TEXT = "用 Dijkstra 求最短路径与二次函数的性质"
+_CJK_PROBE_TERMS = ("函数", "性质", "最短路径", "栈")
+_CJK_PROBE_ABSENT = "栈"
 
 
 class Level(str, Enum):
@@ -108,42 +111,53 @@ def _check_sqlite_fts() -> Check:
 
 
 def _check_cjk_search() -> Check:
-    """验证「jieba 分词 + unicode61」确实能命中 2 字中文词。"""
-    if importlib.util.find_spec("jieba") is None:
-        return Check(
-            name="中文检索",
-            level=Level.REQUIRED,
-            status=Status.MISSING,
-            detail="jieba 未安装",
-            remedy="pip install jieba",
-        )
-    # 走真实的分词入口，而不是直接调 jieba——这样自检覆盖的就是线上同一条代码路径
+    """验证字符 n-gram 索引在跨上下文的情况下仍能正确命中。"""
+    # 走真实的分词入口，这样自检覆盖的就是线上同一条代码路径
     from qbank.core.content.segment import segment, to_match_query
 
-    segmented = segment(_CJK_PROBE_TEXT)
     con = sqlite3.connect(":memory:")
     try:
         con.execute("CREATE VIRTUAL TABLE probe USING fts5(x, tokenize='unicode61')")
-        con.execute("INSERT INTO probe(x) VALUES (?)", (segmented,))
-        hit = con.execute(
-            "SELECT count(*) FROM probe WHERE probe MATCH ?",
-            (to_match_query(_CJK_PROBE_TERM),),
-        ).fetchone()[0]
+        con.execute("INSERT INTO probe(x) VALUES (?)", (segment(_CJK_PROBE_TEXT),))
+
+        def hits(term: str) -> int:
+            query = to_match_query(term)
+            if not query:
+                return 0
+            return int(
+                con.execute("SELECT count(*) FROM probe WHERE probe MATCH ?", (query,)).fetchone()[
+                    0
+                ]
+            )
+
+        missing = [
+            term for term in _CJK_PROBE_TERMS if term != _CJK_PROBE_ABSENT and not hits(term)
+        ]
+        false_positive = hits(_CJK_PROBE_ABSENT) > 0
     finally:
         con.close()
-    if not hit:
+
+    if missing:
         return Check(
             name="中文检索",
             level=Level.REQUIRED,
             status=Status.DEGRADED,
-            detail=f"分词后仍未命中 {_CJK_PROBE_TERM!r}（分词结果：{segmented}）",
-            remedy="检查 jieba 版本；或在 search_service 中启用 LIKE 兜底",
+            detail=f"以下词应能命中却没有：{'、'.join(missing)}",
+            remedy="分词层异常，检查 qbank.core.content.segment",
+        )
+    if false_positive:
+        return Check(
+            name="中文检索",
+            level=Level.REQUIRED,
+            status=Status.DEGRADED,
+            detail=f"未出现的词 {_CJK_PROBE_ABSENT!r} 被误命中",
+            remedy="分词层异常，检查 qbank.core.content.segment",
         )
     return Check(
         name="中文检索",
         level=Level.REQUIRED,
         status=Status.OK,
-        detail=f"jieba 分词 + FTS5 unicode61，{_CJK_PROBE_TERM!r} 命中",
+        detail="字符 n-gram + FTS5 unicode61，单字与多字词均可检索",
     )
 
 

@@ -1,63 +1,65 @@
-"""中文分词：索引端与查询端的唯一入口。
+"""中文检索的分词：索引端与查询端的唯一入口。
 
-**为什么需要这个模块**：SQLite FTS5 自带的分词器都处理不好中文。实测（本机
-SQLite 3.37）：
+**为什么不用 SQLite 自带的分词器**：实测（本机 SQLite 3.37）``trigram`` 要求
+查询串 ≥ 3 字符，``函数``、``性质`` 这类 2 字中文词返回 0 条；``unicode61``
+根本不切中文，整句话是一个 token。
 
-====================  ==================  ============================
-查询                  ``trigram``         jieba 分词 + ``unicode61``
-====================  ==================  ============================
-``函数``              0 条 ❌             1 条 ✅
-``性质``              0 条 ❌             1 条 ✅
-``二次函``            1 条                —
-====================  ==================  ============================
+**为什么不用 jieba 分词**：一开始就是 jieba 方案，实测踩了一个很隐蔽的坑——
+**jieba 的切分结果依赖上下文**：
 
-``trigram`` 要求查询串 ≥ 3 字符，而中文检索词绝大多数是 2 字，因此只能走
-「预分词 + unicode61」。
+================================  ===============================
+输入                              ``cut_for_search`` 结果
+================================  ===============================
+``用 Dijkstra 求最短路径``        ``用 dijkstra 求 最 短 路径``
+``最短路径``（单独作为查询串）    ``最短 路径``
+================================  ===============================
 
-**务必**让写索引和查索引都调用本模块的 :func:`segment`——两端分词方式一旦
-不一致，就会出现「库里明明有、却搜不到」这类极难排查的问题。
+于是索引里只有 ``最``、``短``，查询却要求 ``最短``，这道题**在库里但搜不到**。
+「索引端和查询端调同一个函数」挡不住这个问题，因为函数本身不是上下文无关的。
+
+**现在的方案：字符 n-gram**（Lucene 的 CJK 分析器用的也是这个思路）
+
+* 连续中日韩字符 → 拆成**一元 + 二元**。一元是必须的：``栈``、``图``、``树``、
+  ``环``这些单字术语在计算机和数学题库里极常见，只有二元的话单字查询全部失效。
+* 拉丁字母与数字的连续段 → 整段保留，并套用别名表（``C++`` → ``cpp``，
+  因为 unicode61 会把 ``+`` 当分隔符，不处理的话 ``C++`` 和 ``C`` 撞在一起）。
+
+这个切分是**上下文无关**的：同样的字符串在任何位置都切出同样的 token，所以
+两端必然一致。代价是索引变大，以及子串式的误配——搜 ``短路`` 会命中
+「最**短路**径」。对题库而言这是可接受的：召回比精确更重要，多出几条让人扫一眼
+的成本远低于「明明有这道题却搜不到、只好重新录一遍」。
 """
 
 from __future__ import annotations
 
-import logging
 import re
 import unicodedata
-from functools import lru_cache
 
-import jieba
+#: 连续的中日韩字符（含中文、日文假名、韩文）
+_CJK_RUN = re.compile(r"[㐀-䶿一-鿿぀-ヿ가-힯]+")
 
-# jieba 首次调用会往 stderr 打印词典构建进度，污染 CLI 输出与测试断言
-jieba.setLogLevel(logging.WARNING)
+#: 连续的拉丁字母、数字与技术标识里常见的符号
+_LATIN_RUN = re.compile(r"[0-9a-z][0-9a-z#+._\-]*")
 
-#: FTS5 查询语法里的特殊字符，必须从用户输入中剔除，否则会构造出非法查询
-_FTS_SPECIAL = re.compile(r"[\"'()*:^{}\[\]~]")
+#: 一次扫描同时切出两类 token
+_TOKEN_RUN = re.compile(f"{_CJK_RUN.pattern}|{_LATIN_RUN.pattern}")
 
-#: 连续空白
 _WS = re.compile(r"\s+")
 
-#: 至少含一个字母/数字/汉字才算有效 token，否则是纯标点噪声
-_HAS_WORD_CHAR = re.compile(r"[0-9a-z\u4e00-\u9fff\u3040-\u30ff]")
-
-#: unicode61 分词器会把 ``+ # .`` 当作分隔符，于是 "C++" 和 "C#" 都退化成 "c"。
-#: 对编程类课程这是硬伤，因此在归一化阶段先把它们换成可索引的别名。
-#: 索引端与查询端共用本表，所以两边始终一致。
+#: unicode61 把 ``+ # .`` 当分隔符，于是 ``C++`` 和 ``C#`` 都退化成 ``c``。
+#: 对编程类课程这是硬伤，所以在归一化阶段换成可索引的别名。
+#: 索引端与查询端共用本表，两边始终一致。
 _ALIASES = (
     ("c++", " cpp "),
     ("c#", " csharp "),
-    (".net", " dotnet "),
     ("f#", " fsharp "),
+    (".net", " dotnet "),
     ("objective-c", " objectivec "),
 )
 
-#: 查询端剔除的虚词。**只在查询端剔除，索引端全部保留**——索引里留着它们
-#: 才能支持将来的短语检索，而查询时把它们 AND 进去只会平白降低召回。
-# 写成空格分隔的字符串而不是列表字面量：停用词表要常改，这种写法改起来最省事
-_STOPWORD_TEXT = (
-    "的 了 和 与 及 或 是 在 有 对 中 为 以 之 等 上 下 个 用 把 被 从 到 并 则 "
-    "下列 下面 以下 关于 请 简述 说明 what which the a an of to is are"
-)
-_QUERY_STOPWORDS = frozenset(_STOPWORD_TEXT.split())
+#: CJK 段落拆 n-gram 时的最大 n。只到 2：三元及以上对召回没有额外帮助
+#: （二元的 AND 已经等价于子串匹配），只会让索引膨胀。
+MAX_NGRAM = 2
 
 
 def normalize(text: str) -> str:
@@ -74,51 +76,64 @@ def normalize(text: str) -> str:
     return _WS.sub(" ", folded).strip()
 
 
-@lru_cache(maxsize=4096)
-def _cut(text: str) -> tuple[str, ...]:
-    return tuple(
-        token
-        for raw in jieba.cut_for_search(text)
-        if (token := raw.strip()) and _HAS_WORD_CHAR.search(token)
-    )
+def _run_tokens(run: str) -> list[str]:
+    """把一个连续段切成 token。"""
+    if not _CJK_RUN.fullmatch(run):
+        return [run]
+    tokens = list(run)  # 一元：支撑「栈」「图」「树」这类单字术语的检索
+    tokens.extend(run[i : i + 2] for i in range(len(run) - 1))  # 二元
+    return tokens
+
+
+def tokenize(text: str) -> list[str]:
+    """切出 token，保持出现顺序，不去重。
+
+    >>> tokenize("求最短路径")
+    ['求', '最', '短', '路', '径', '求最', '最短', '短路', '路径']
+    >>> tokenize("用 C++ 写")
+    ['用', 'cpp', '写']
+    >>> tokenize("Dijkstra 算法")
+    ['dijkstra', '算', '法', '算法']
+    >>> tokenize("！！！")
+    []
+    """
+    normalized = normalize(text)
+    tokens: list[str] = []
+    for match in _TOKEN_RUN.finditer(normalized):
+        tokens.extend(_run_tokens(match.group(0)))
+    return tokens
 
 
 def segment(text: str) -> str:
-    """把文本切成空格分隔的 token 串，供 FTS5 ``unicode61`` 索引或查询。
+    """供 FTS5 ``unicode61`` **写索引**用的 token 串。
 
-    >>> segment("二次函数的图像与性质")
-    '二次 函数 的 图像 与 性质'
-    >>> segment("Ｐｙｔｈｏｎ 循环")
-    'python 循环'
-    >>> segment("用 C++ 实现")
-    '用 cpp 实现'
-    >>> segment("！！！")
+    >>> segment("二次函数")
+    '二 次 函 数 二次 次函 函数'
+    >>> segment("")
     ''
     """
-    cleaned = _FTS_SPECIAL.sub(" ", normalize(text))
-    if not cleaned.strip():
-        return ""
-    return " ".join(_cut(cleaned))
+    return " ".join(tokenize(text))
 
 
 def to_match_query(user_input: str) -> str:
-    """把用户输入转成 FTS5 ``MATCH`` 表达式（各 token 之间为 AND）。
+    """把用户输入转成 FTS5 ``MATCH`` 表达式。
 
-    虚词会被剔除以提高召回；若剔完为空则退回使用全部 token（例如用户就想搜
-    「的」这种边缘情况）。返回空串表示「无有效检索词」，调用方应改为不加全文条件。
+    各 token 之间是 AND。对 CJK 而言，「全部二元组都出现」近似等价于子串匹配，
+    这正是用户对搜索框的预期。
 
-    >>> to_match_query("二次函数")
-    '"二次" AND "函数"'
-    >>> to_match_query("二次函数的图像与性质")
-    '"二次" AND "函数" AND "图像" AND "性质"'
-    >>> to_match_query("!!!")
+    返回空串表示「无有效检索词」，调用方应改为**不加全文条件**，而不是认为
+    「没有任何题匹配」——这两种语义混淆会让搜索框看起来完全失效。
+
+    >>> to_match_query("最短路径")
+    '"最" AND "短" AND "路" AND "径" AND "最短" AND "短路" AND "路径"'
+    >>> to_match_query("栈")
+    '"栈"'
+    >>> to_match_query("！！！")
     ''
     """
-    tokens = segment(user_input).split()
+    tokens = tokenize(user_input)
     if not tokens:
         return ""
-    meaningful = [t for t in tokens if t not in _QUERY_STOPWORDS]
-    tokens = meaningful or tokens
-    # 去重但保持顺序，避免 "函数 函数" 退化成重复条件
-    seen: dict[str, None] = dict.fromkeys(tokens)
-    return " AND ".join(f'"{t}"' for t in seen)
+    # 去重但保持顺序，避免重复条件
+    unique = dict.fromkeys(tokens)
+    return " AND ".join(f'"{token}"' for token in unique)

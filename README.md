@@ -48,6 +48,31 @@ playwright install chromium
 qbank doctor
 ```
 
+建课、录题、检索：
+
+```bash
+qbank course add "数据结构" --code CS201
+qbank question add "数据结构" docs/examples/题目草稿示例.yaml
+qbank question list --course 数据结构 -s 最短路径
+qbank question show <题目id前8位>
+```
+
+常用命令：
+
+| 命令 | 作用 |
+|---|---|
+| `qbank info` | 题库位置与规模 |
+| `qbank chapter list <课程>` | 章节树与每节题量 |
+| `qbank question list --type/--difficulty/--tag/-s` | 筛选与全文检索 |
+| `qbank question duplicates <课程> <文件>` | 导入前查重（只报告，不改动） |
+| `qbank question trash [--purge --yes]` | 回收站 |
+| `qbank question history <id> [--rollback-to N]` | 修改历史与回滚 |
+| `qbank tag merge <源> <目标>` | 合并同义标签 |
+| `qbank reindex` | 重建全文索引 |
+
+`qbank question add` 吃的是最贴近内部结构的 YAML/JSON，面向脚本化。
+批量导入 md / docx / html 请用 `qbank import`（见[导入模板规范](docs/导入模板规范.md)）。
+
 ## 文档
 
 - [设计说明](docs/设计说明.md)
