@@ -37,3 +37,6 @@ Thumbs.db
 # ---- 本地覆盖的配置
 .env
 .env.local
+
+# ---- Alembic
+migrations/versions/__pycache__/
