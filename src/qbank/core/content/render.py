@@ -20,6 +20,7 @@ r"""Markdown → HTML 渲染。
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -236,8 +237,10 @@ class _Renderer(RendererHTML):
         if isinstance(src, str) and src.startswith(ASSET_SCHEME):
             resolved = self._opts.asset_resolver(src[len(ASSET_SCHEME) :])
             if resolved is None:
+                digest = src[len(ASSET_SCHEME) :]
+                # 同上：title 里不写 asset://
                 return (
-                    f'<span class="asset-missing" title="{escape(src)}">'
+                    f'<span class="asset-missing" title="图片 {escape(digest[:12])} 未找到">'
                     f"{escape(self._opts.missing_asset_text)}</span>"
                 )
             token.attrSet("src", resolved)
@@ -292,6 +295,52 @@ def _fix_inline_display_math(html: str) -> str:
     return "".join(rebuilt)
 
 
+#: 任意属性里的 ``asset://<sha256>``。
+#:
+#: 下限刻意放到 4 位而不是 64 位：真实哈希总是 64 位，但测试与示例里常用
+#: ``asset://aa`` 这样的短串。要求满 64 位会让这些场景静默失配——``asset://``
+#: 原样活到 sanitize 阶段，被当作非法协议整个剥掉，表现为「图莫名消失」。
+_ASSET_URL = re.compile(rf"{re.escape(ASSET_SCHEME)}(?P<sha>[0-9a-fA-F]{{4,64}})")
+
+
+#: 整个引用了 asset:// 的 ``<img>`` 标签
+_ASSET_IMG_TAG = re.compile(
+    rf"<img\b[^>]*?{re.escape(ASSET_SCHEME)}(?P<sha>[0-9a-fA-F]{{4,64}})[^>]*?>",
+    re.IGNORECASE,
+)
+
+
+def _resolve_asset_urls(html: str, options: RenderOptions) -> str:
+    """解析**原始 HTML** 里的 ``asset://`` 引用。
+
+    Markdown 的 ``![](asset://x)`` 走的是 token 渲染那条路径；但从 Word 导入的
+    内容里会有 pandoc 输出的 ``<img src="asset://x" style="width:1.5in" />``
+    ——它作为原始 HTML 整块透传，碰不到 token 渲染。不在这里补一刀的话，
+    ``asset://`` 会一路活到 sanitize 阶段被当成非法协议剥掉，图就没了。
+    """
+
+    def replace_missing_tag(match: re.Match[str]) -> str:
+        """图找不到时整个标签换成提示，与 Markdown 那条路径表现一致。
+
+        只留一个 src 为空的 ``<img>`` 会渲染成一个破图图标——用户看到的是
+        「这里本来有张图但坏了」，而不是「这张图没带过来」，排查方向完全不同。
+        """
+        if options.asset_resolver(match.group("sha")) is not None:
+            return match.group(0)
+        # title 里不能再写 asset://：紧随其后的 URL 替换会把它当引用吃掉，
+        # title 就变成空串了
+        return (
+            f'<span class="asset-missing" title="图片 {match.group("sha")[:12]} 未找到">'
+            f"{escape(options.missing_asset_text)}</span>"
+        )
+
+    def replace_url(match: re.Match[str]) -> str:
+        return options.asset_resolver(match.group("sha")) or ""
+
+    html = _ASSET_IMG_TAG.sub(replace_missing_tag, html)
+    return _ASSET_URL.sub(replace_url, html)
+
+
 def _sanitize(html: str, options: RenderOptions) -> str:
     attributes = {tag: set(attrs) for tag, attrs in ALLOWED_ATTRIBUTES.items()}
     for tag, attrs in options.extra_allowed_attributes.items():
@@ -311,14 +360,15 @@ def render_markdown(markdown: str, options: RenderOptions | None = None) -> str:
 
     >>> render_markdown("**粗** 与 $x^2$", RenderOptions(math=MathMode.RAW))
     '<p><strong>粗</strong> 与 <span class="math inline">x^2</span></p>'
-    >>> render_markdown("![图](asset://x)", RenderOptions(asset_resolver=lambda _: None))
-    '<p><span class="asset-missing" title="asset://x">［图片缺失］</span></p>'
+    >>> render_markdown("![图](asset://aaaa)", RenderOptions(asset_resolver=lambda _: None))
+    '<p><span class="asset-missing" title="图片 aaaa 未找到">［图片缺失］</span></p>'
     >>> render_markdown("<script>alert(1)</script>正文")
     '正文'
     """
     opts = options or RenderOptions()
     normalized = normalize_math(markdown)
-    html = _fix_inline_display_math(_build_parser(opts).render(normalized)).strip()
+    html = _fix_inline_display_math(_build_parser(opts).render(normalized))
+    html = _resolve_asset_urls(html, opts).strip()
     if opts.sanitize:
         html = _sanitize(html, opts).strip()
     if opts.wrapper_class:

@@ -121,8 +121,10 @@ def parse_question_type(raw: str) -> QuestionType:
     normalized = text.replace(" ", "").replace("　", "")
     if normalized in TYPE_ALIASES:
         return TYPE_ALIASES[normalized]
-    known = "、".join(sorted({*TYPE_ALIASES, *(t.value for t in QuestionType)}))
-    raise ValueError(f"无法识别的题型 {raw!r}；可用写法：{known}")
+    # 只列规范中文名。别名表有四十多项，全列出来会把终端刷满，
+    # 用户也不需要知道「材料题」也能写——他写错时想知道的是「该写什么」。
+    known = "、".join(kind.label for kind in QuestionType)
+    raise ValueError(f"无法识别的题型「{raw.strip()}」；请写成：{known}")
 
 
 class QuestionStatus(str, Enum):

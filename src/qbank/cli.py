@@ -22,8 +22,12 @@ from qbank.core.repo.course import ChapterRepo, CourseRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
 from qbank.core.repo.tag import TagRepo
 from qbank.core.schemas import QuestionDraft
+from qbank.core.services.asset import AssetService
 from qbank.core.services.question import QuestionService
 from qbank.doctor import Level, Status, run_checks
+from qbank.exchange.import_service import ImportService, plan_file
+from qbank.exchange.importers.loader import SUPPORTED_SUFFIXES, UnsupportedSourceError
+from qbank.exchange.pandoc import PandocConversionError, PandocUnavailableError
 
 app = typer.Typer(
     name="qbank",
@@ -35,10 +39,14 @@ course_app = typer.Typer(help="课程管理", no_args_is_help=True)
 chapter_app = typer.Typer(help="章节管理", no_args_is_help=True)
 tag_app = typer.Typer(help="标签管理", no_args_is_help=True)
 question_app = typer.Typer(help="题目管理", no_args_is_help=True)
+asset_app = typer.Typer(help="图片资源管理", no_args_is_help=True)
+batch_app = typer.Typer(help="导入批次", no_args_is_help=True)
 app.add_typer(course_app, name="course")
 app.add_typer(chapter_app, name="chapter")
 app.add_typer(tag_app, name="tag")
 app.add_typer(question_app, name="question")
+app.add_typer(asset_app, name="asset")
+app.add_typer(batch_app, name="batch")
 
 _STATUS_MARK = {Status.OK: "✓", Status.DEGRADED: "!", Status.MISSING: "✗"}
 _STATUS_COLOR = {
@@ -624,6 +632,289 @@ def question_duplicates(
                         f"{existing.stem.replace(chr(10), ' ')[:36]}",
                         fg=color,
                     )
+    finally:
+        context.close()
+
+
+# ===================================================================== 导入
+@app.command("import")
+def import_file(
+    course: Annotated[str, typer.Argument(help="课程名或 id")],
+    file: Annotated[Path, typer.Argument(help="要导入的文件（md / docx / html 等）")],
+    policy: Annotated[
+        ConflictPolicy, typer.Option("--on-conflict", help="遇到库里已有的同一道题怎么处理")
+    ] = ConflictPolicy.SKIP,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只预览，不写入任何内容")] = False,
+    only: Annotated[str, typer.Option("--only", help="只导入指定序号，如 1,3,5-8")] = "",
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过确认，便于脚本化")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="逐条显示")] = False,
+) -> None:
+    """按模板批量导入题目。
+
+    流程是**先预览、后确认**：先解析、校验、查重并列出每条将发生什么，
+    确认后才写入。不加 ``--yes`` 时一定会停下来问一次。
+
+    模板格式见 docs/导入模板规范.md。
+    """
+    context = _open()
+    try:
+        course_id = _resolve_course(context, course)
+        selected = _parse_selection(only)
+        with context.session() as session:
+            try:
+                plan, document = plan_file(session, course_id, file)
+            except (UnsupportedSourceError, FileNotFoundError) as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            except PandocUnavailableError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            except PandocConversionError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+
+            try:
+                _print_plan(plan, policy, verbose=verbose, selected=selected)
+                if not plan.questions:
+                    typer.secho("没有可导入的题目。", fg=typer.colors.YELLOW)
+                    raise typer.Exit(code=1 if plan.errors else 0)
+                if dry_run:
+                    typer.secho("\n--dry-run：未写入任何内容。", fg=typer.colors.BRIGHT_BLACK)
+                    return
+                if not yes:
+                    typer.confirm("\n确认导入？", abort=True)
+                result = ImportService(session).commit(plan, policy=policy, selected=selected)
+            finally:
+                document.close()
+
+        typer.secho(f"\n{result.summary()}", fg=typer.colors.GREEN, bold=True)
+        for message in result.image_errors:
+            typer.secho(f"  图片：{message}", fg=typer.colors.YELLOW)
+        typer.secho(
+            f"批次 {result.batch_id[:8]}；如需撤销：qbank batch rollback {result.batch_id[:8]}",
+            fg=typer.colors.BRIGHT_BLACK,
+        )
+    finally:
+        context.close()
+
+
+def _parse_selection(text: str) -> list[int] | None:
+    """解析 ``1,3,5-8`` 形式的序号选择。空串表示全选。"""
+    if not text.strip():
+        return None
+    picked: dict[int, None] = {}
+    for piece in text.replace("，", ",").split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if "-" in piece:
+            try:
+                start, end = (int(part) for part in piece.split("-", 1))
+            except ValueError:
+                typer.secho(f"无法解析序号区间「{piece}」", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from None
+            for number in range(start, end + 1):
+                picked[number] = None
+        else:
+            try:
+                picked[int(piece)] = None
+            except ValueError:
+                typer.secho(f"无法解析序号「{piece}」", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from None
+    return list(picked)
+
+
+def _print_plan(
+    plan: Any, policy: ConflictPolicy, *, verbose: bool, selected: list[int] | None
+) -> None:
+    typer.secho(f"源文件：{plan.source_name}（{plan.source_format}）", bold=True)
+    typer.echo(plan.summary(policy))
+
+    if plan.errors:
+        typer.secho("\n解析失败的题目：", fg=typer.colors.RED, bold=True)
+        for error in plan.errors:
+            typer.secho(f"  {error}", fg=typer.colors.RED)
+
+    show_all = verbose or plan.exact_duplicate_count or plan.similar_count
+    if not show_all:
+        return
+    typer.echo("")
+    for item in plan.questions:
+        skipped = selected is not None and item.index not in selected
+        action = "未勾选" if skipped else item.action_under(policy)
+        color = (
+            typer.colors.BRIGHT_BLACK
+            if skipped
+            else typer.colors.YELLOW
+            if item.exact_duplicate or item.similar
+            else typer.colors.GREEN
+        )
+        typer.secho(
+            f"  {item.index:>3}. [{action}] {item.draft.type.label}  {item.headline}",
+            fg=color,
+        )
+        for hint in item.duplicates:
+            mark = "═" if hint.exact else "~"
+            typer.secho(
+                f"       {mark} {hint.label}（{hint.score:.0%}） 已有题目 {hint.question_id[:8]}",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+        if item.similar and not item.exact_duplicate:
+            typer.secho(
+                "       ↑ 相似仅供参考：一字之差就可能把题意反过来（正确↔错误），请人工确认",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+
+
+@app.command("formats")
+def formats() -> None:
+    """列出支持导入的文件格式及其依赖状态。"""
+    from qbank.exchange import pandoc as pandoc_module
+
+    found = pandoc_module.capability()
+    typer.echo("无需额外依赖：  " + "、".join(sorted(n for n in (".md", ".markdown", ".txt"))))
+    others = sorted(SUPPORTED_SUFFIXES - {".md", ".markdown", ".txt"})
+    if found.available:
+        typer.secho(
+            f"需要 pandoc（已就绪 {found.version}）：  " + "、".join(others),
+            fg=typer.colors.GREEN,
+        )
+    else:
+        typer.secho("需要 pandoc（当前不可用）：  " + "、".join(others), fg=typer.colors.YELLOW)
+        typer.secho(f"    {found.detail}", fg=typer.colors.BRIGHT_BLACK)
+        typer.secho('    安装：pip install "pypandoc_binary"', fg=typer.colors.BRIGHT_BLACK)
+
+
+# ===================================================================== 批次
+@batch_app.command("list")
+def batch_list(
+    limit: Annotated[int, typer.Option("--limit", min=1, max=100)] = 20,
+) -> None:
+    """列出导入历史。"""
+    from sqlalchemy import select
+
+    from qbank.core.models import ImportBatch
+
+    context = _open()
+    try:
+        with context.session() as session:
+            batches = session.scalars(
+                select(ImportBatch).order_by(ImportBatch.started_at.desc()).limit(limit)
+            ).all()
+            if not batches:
+                typer.echo("还没有导入记录。")
+                return
+            for batch in batches:
+                stamp = batch.started_at.strftime("%Y-%m-%d %H:%M")
+                state = "成功" if batch.succeeded else "有失败"
+                revertible = "可撤销" if batch.created_ids else "已撤销/无新建"
+                typer.echo(
+                    f"{batch.id[:8]}  {stamp}  {batch.source_name:28} "
+                    f"新建{batch.created_count} 更新{batch.updated_count} "
+                    f"跳过{batch.skipped_count} 失败{batch.failed_count}  {state}  {revertible}"
+                )
+    finally:
+        context.close()
+
+
+@batch_app.command("rollback")
+def batch_rollback(
+    batch_id: Annotated[str, typer.Argument(help="批次 id（可用前 8 位）")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过确认")] = False,
+) -> None:
+    """撤销一次导入：删掉该批**新建**的题目。
+
+    被覆盖的题不会自动恢复——它们有各自的修改历史，应该用
+    `qbank question history <id> --rollback-to N` 单独回滚。混在一起做会让
+    「撤销导入」的后果变得不可预测。
+    """
+    from sqlalchemy import select
+
+    from qbank.core.models import ImportBatch
+
+    context = _open()
+    try:
+        with context.session() as session:
+            batch = session.scalar(select(ImportBatch).where(ImportBatch.id.startswith(batch_id)))
+            if batch is None:
+                typer.secho(f"找不到批次：{batch_id}", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1)
+            count = len(batch.created_ids)
+            if not count:
+                typer.secho("该批次没有可撤销的新建题目。", fg=typer.colors.YELLOW)
+                return
+            if not yes:
+                typer.confirm(f"将永久删除本批新建的 {count} 道题。继续？", abort=True)
+            removed = ImportService(session).rollback_batch(batch.id)
+        typer.secho(f"已撤销，删除 {removed} 道题。", fg=typer.colors.GREEN)
+    finally:
+        context.close()
+
+
+# ===================================================================== 图片
+@asset_app.command("stats")
+def asset_stats() -> None:
+    """图片统计与孤儿检查。"""
+    from sqlalchemy import func, select
+
+    from qbank.core.models import Asset
+
+    context = _open()
+    try:
+        with context.session() as session:
+            total = session.scalar(select(func.count(Asset.id))) or 0
+            size = session.scalar(select(func.sum(Asset.byte_size))) or 0
+            assets = AssetService(session, context.paths)
+            orphans = assets.orphans()
+            typer.echo(f"图片目录：{context.paths.assets_dir}")
+            typer.echo(f"共 {total} 张，占用 {size / 1024 / 1024:.1f} MB")
+            missing = [
+                asset
+                for asset in session.scalars(select(Asset)).all()
+                if assets.path_of(asset.sha256) is None
+            ]
+            if missing:
+                typer.secho(
+                    f"有 {len(missing)} 张图片在库里有记录但文件不见了（题目会显示「图片缺失」）",
+                    fg=typer.colors.RED,
+                )
+            if orphans:
+                freed = sum(asset.byte_size for asset in orphans)
+                typer.secho(
+                    f"孤儿图片 {len(orphans)} 张，占用 {freed / 1024 / 1024:.1f} MB；"
+                    "用 `qbank asset clean` 清理",
+                    fg=typer.colors.YELLOW,
+                )
+            else:
+                typer.secho("没有孤儿图片。", fg=typer.colors.GREEN)
+    finally:
+        context.close()
+
+
+@asset_app.command("clean")
+def asset_clean(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过确认")] = False,
+) -> None:
+    """删除没有任何题目引用的图片。"""
+    context = _open()
+    try:
+        with context.session() as session:
+            assets = AssetService(session, context.paths)
+            orphans = list(assets.orphans())
+            if not orphans:
+                typer.secho("没有孤儿图片。", fg=typer.colors.GREEN)
+                return
+            freed = sum(asset.byte_size for asset in orphans)
+            if not yes:
+                message = (
+                    f"将删除 {len(orphans)} 张无人引用的图片"
+                    f"（{freed / 1024 / 1024:.1f} MB）。继续？"
+                )
+                typer.confirm(message, abort=True)
+            removed, released = assets.purge_orphans()
+        typer.secho(
+            f"已删除 {removed} 张，释放 {released / 1024 / 1024:.1f} MB。", fg=typer.colors.GREEN
+        )
     finally:
         context.close()
 

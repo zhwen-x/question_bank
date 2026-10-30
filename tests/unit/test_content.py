@@ -165,9 +165,46 @@ def test_render_resolves_asset_scheme() -> None:
 
 def test_render_flags_missing_asset_instead_of_breaking() -> None:
     """图丢了要看得见，不能静默渲染出一个坏图标。"""
-    html = render_markdown("![图](asset://gone)", RenderOptions(asset_resolver=lambda _: None))
+    html = render_markdown("![图](asset://dead)", RenderOptions(asset_resolver=lambda _: None))
     assert "图片缺失" in html
     assert "<img" not in html
+
+
+def test_render_resolves_asset_in_raw_html_img() -> None:
+    """从 Word 导入的内容里，带尺寸的图片是原始 HTML ``<img>``，不是 Markdown 语法。
+
+    这条路径碰不到 token 渲染，必须单独处理，否则 ``asset://`` 会活到 sanitize
+    阶段被当成非法协议剥掉，图就莫名消失了。
+    """
+    html = render_markdown(
+        '<img src="asset://abc123" style="width:1.5in" />',
+        RenderOptions(asset_resolver=lambda sha: f"/assets/{sha}"),
+    )
+    assert 'src="/assets/abc123"' in html
+
+
+def test_render_missing_raw_html_asset_shows_same_marker() -> None:
+    html = render_markdown(
+        '<img src="asset://abc123" />', RenderOptions(asset_resolver=lambda _: None)
+    )
+    assert "图片缺失" in html
+    assert "<img" not in html
+
+
+def test_missing_asset_title_survives_url_rewriting() -> None:
+    """提示里不能再写 asset://——紧随其后的 URL 替换会把它吃成空串。"""
+    html = render_markdown("![图](asset://abc123)", RenderOptions(asset_resolver=lambda _: None))
+    assert 'title=""' not in html
+    assert "abc123" in html
+
+
+def test_render_keeps_merged_cell_tables_from_word() -> None:
+    """试卷里合并单元格的表格很常见。pandoc 以 HTML + colspan 形式给出，必须留住。"""
+    html = render_markdown(
+        '<table><tr><th>阶段</th><th colspan="2">耗时</th></tr>'
+        "<tr><td>init</td><td>10</td><td>12</td></tr></table>"
+    )
+    assert 'colspan="2"' in html
 
 
 def test_render_strips_script_and_dangerous_urls() -> None:

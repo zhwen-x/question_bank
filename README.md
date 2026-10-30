@@ -68,10 +68,47 @@ qbank question show <题目id前8位>
 | `qbank question trash [--purge --yes]` | 回收站 |
 | `qbank question history <id> [--rollback-to N]` | 修改历史与回滚 |
 | `qbank tag merge <源> <目标>` | 合并同义标签 |
+| `qbank import <课程> <文件>` | 批量导入（见下） |
+| `qbank formats` | 支持的导入格式及依赖状态 |
+| `qbank batch list / rollback` | 导入历史与整批撤销 |
+| `qbank asset stats / clean` | 图片占用与孤儿清理 |
 | `qbank reindex` | 重建全文索引 |
 
 `qbank question add` 吃的是最贴近内部结构的 YAML/JSON，面向脚本化。
-批量导入 md / docx / html 请用 `qbank import`（见[导入模板规范](docs/导入模板规范.md)）。
+
+## 批量导入
+
+从 Word / Markdown / HTML 按模板导入。**先预览、后确认**：
+
+```bash
+qbank import "数据结构" 历年真题.docx --dry-run -v
+```
+
+它会逐条告诉你「将要新建 / 已存在将跳过 / 第几行解析失败」，**不写入任何内容**。
+确认无误后去掉 `--dry-run`：
+
+```bash
+qbank import "数据结构" 历年真题.docx
+qbank import "数据结构" 历年真题.docx --only 1,3-8      # 只导入某几道
+qbank import "数据结构" 历年真题.docx --on-conflict overwrite
+```
+
+导错了可以整批撤销：
+
+```bash
+qbank batch list
+qbank batch rollback <批次id前8位>
+```
+
+模板格式见 **[导入模板规范](docs/导入模板规范.md)**，示例文件在
+[`docs/examples/`](docs/examples/)（md / docx / html 三份，内容等价，可直接改）。
+
+要点：
+
+- Word 里的**公式直接用公式编辑器**，导入时自动转成 LaTeX；图片直接贴，自动收进题库
+- 合并单元格的表格会完整保留
+- 一道题格式不对不影响同一份文件里的其他题目，错误带源文件行号
+- 相似题只提示、不自动处理——一字之差就可能把题意反过来（正确↔错误），必须人工确认
 
 ## 文档
 

@@ -296,3 +296,98 @@ def test_info_reports_paths_and_counts(seeded: Path) -> None:
     output = run("info")
     assert "题库目录" in output and "qbank.db" in output
     assert "1 门" in output
+
+
+# --------------------------------------------------------------- 模板导入
+EXAMPLES = Path(__file__).resolve().parents[2] / "docs" / "examples"
+
+
+def test_import_markdown_example() -> None:
+    run("course", "add", "数据结构")
+    output = run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
+    assert "新建 7" in output
+    assert "7 道" in run("info")
+
+
+def test_import_dry_run_writes_nothing() -> None:
+    """``--dry-run`` 是用户敢于尝试导入的前提，必须真的什么都不写。"""
+    run("course", "add", "数据结构")
+    output = run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--dry-run")
+    assert "未写入任何内容" in output
+    assert "0 道" in run("info")
+
+
+def test_import_requires_confirmation_without_yes() -> None:
+    run("course", "add", "数据结构")
+    result = runner.invoke(app, ["import", "数据结构", str(EXAMPLES / "导入模板示例.md")])
+    assert result.exit_code != 0, "没有 --yes 时应停下来确认"
+    assert "0 道" in run("info")
+
+
+def test_import_only_selected_indices() -> None:
+    run("course", "add", "数据结构")
+    output = run(
+        "import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--only", "1,3-4", "--yes"
+    )
+    assert "新建 3" in output
+
+
+def test_import_reports_duplicates_on_second_run() -> None:
+    run("course", "add", "数据结构")
+    run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
+    output = run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
+    assert "跳过 7" in output
+    assert "完全相同" in output
+
+
+def test_import_overwrite_updates() -> None:
+    run("course", "add", "数据结构")
+    run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
+    output = run(
+        "import",
+        "数据结构",
+        str(EXAMPLES / "导入模板示例.md"),
+        "--on-conflict",
+        "overwrite",
+        "--yes",
+    )
+    assert "更新 7" in output
+
+
+def test_batch_list_and_rollback() -> None:
+    run("course", "add", "数据结构")
+    run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
+    listing = run("batch", "list")
+    assert "导入模板示例.md" in listing
+    batch_id = listing.split()[0]
+    assert "已撤销，删除 7 道题" in run("batch", "rollback", batch_id, "--yes")
+    assert "0 道" in run("info")
+
+
+def test_import_unsupported_format_is_rejected(tmp_path: Path) -> None:
+    run("course", "add", "数据结构")
+    bogus = tmp_path / "题库.pdf"
+    bogus.write_text("不是支持的格式", encoding="utf-8")
+    result = runner.invoke(app, ["import", "数据结构", str(bogus), "--yes"])
+    assert result.exit_code == 1
+    assert "不支持的文件类型" in result.output
+
+
+def test_import_missing_file_is_reported(tmp_path: Path) -> None:
+    run("course", "add", "数据结构")
+    result = runner.invoke(app, ["import", "数据结构", str(tmp_path / "不存在.md"), "--yes"])
+    assert result.exit_code == 1
+    assert "找不到文件" in result.output
+
+
+def test_formats_command_lists_dependency_state() -> None:
+    output = run("formats")
+    assert ".md" in output and ".docx" in output
+    assert "pandoc" in output
+
+
+def test_asset_stats_and_clean() -> None:
+    run("course", "add", "数据结构")
+    run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
+    assert "没有孤儿图片" in run("asset", "stats")
+    assert "没有孤儿图片" in run("asset", "clean")

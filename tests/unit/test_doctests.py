@@ -18,6 +18,10 @@ MODULES = [
     "qbank.core.content.text",
     "qbank.core.content.render",
     "qbank.core.services.dedup",
+    "qbank.core.services.asset",
+    "qbank.exchange.pandoc",
+    "qbank.exchange.importers.sections",
+    "qbank.exchange.importers.template",
 ]
 
 
