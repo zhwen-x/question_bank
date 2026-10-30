@@ -1,7 +1,7 @@
 # 安装： pre-commit install
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -14,21 +14,30 @@ repos:
         args: ["--fix=lf"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.7
+    rev: v0.17.3
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.1
-    hooks:
-      - id: mypy
-        files: ^src/qbank/
-        additional_dependencies: [pydantic>=2.7, types-PyYAML, SQLAlchemy>=2.0.30]
-
   - repo: local
     hooks:
+      # mypy 用**项目自身的环境**跑，而不是 mirrors-mypy 的隔离环境。
+      #
+      # 隔离环境要手工列出全部运行时依赖（additional_dependencies），而代码
+      # 每多一个 import 就得同步一次——实测已经漂移过：清单里只有 pydantic、
+      # SQLAlchemy、types-PyYAML，而代码还 import 了 fastapi、typer、
+      # platformdirs、markdown-it-py、starlette，缺一个就是一片
+      # 「Cannot find implementation or library stub」。
+      #
+      # 用 system 环境还顺带保证了「提交前跑的」和「CI 跑的」是同一回事。
+      - id: mypy
+        name: mypy (strict)
+        entry: mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+
       - id: pytest-fast
         name: pytest (快速子集，跳过 slow/pandoc/pdf)
         entry: pytest -q -m "not slow and not pandoc and not pdf"

@@ -168,7 +168,7 @@ def _check_pandoc() -> Check:
             level=Level.OPTIONAL,
             status=Status.MISSING,
             detail="pypandoc 未安装",
-            remedy="pip install pypandoc_binary —— 缺失时 Word/HTML 导入导出不可用，md/html 仍可用",
+            remedy="pip install pypandoc_binary —— 缺失时无法导入 Word/HTML，Markdown 仍可用",
         )
     import pypandoc
 
@@ -186,19 +186,19 @@ def _check_pandoc() -> Check:
         name="pandoc",
         level=Level.OPTIONAL,
         status=Status.OK,
-        detail=f"pandoc {version}，支持 docx/html 双向转换与 OMML↔LaTeX",
+        detail=f"pandoc {version}，可导入 docx/html，Word 公式自动转 LaTeX",
     )
 
 
 def _check_pdf() -> Check:
     if importlib.util.find_spec("playwright") is None:
         return Check(
-            name="PDF 导出",
+            name="PDF 渲染依赖",
             level=Level.OPTIONAL,
             status=Status.MISSING,
-            detail="playwright 未安装",
-            remedy='pip install "qbank[pdf]" 后执行 playwright install chromium'
-            " —— 缺失时降级为导出 HTML，由浏览器打印成 PDF",
+            detail="playwright 未安装（导出功能本身尚未实现）",
+            remedy='导出上线后需要它；可提前装：pip install "qbank[pdf]"'
+            " 再执行 playwright install chromium",
         )
     from playwright.sync_api import sync_playwright
 
@@ -207,27 +207,27 @@ def _check_pdf() -> Check:
             executable = pw.chromium.executable_path
     except Exception as exc:
         return Check(
-            name="PDF 导出",
+            name="PDF 渲染依赖",
             level=Level.OPTIONAL,
             status=Status.DEGRADED,
             detail=f"playwright 已装但 Chromium 不可用：{exc}",
-            remedy="playwright install chromium —— 在此之前降级为导出 HTML",
+            remedy="playwright install chromium（导出功能本身尚未实现）",
         )
     from pathlib import Path
 
     if not Path(executable).exists():
         return Check(
-            name="PDF 导出",
+            name="PDF 渲染依赖",
             level=Level.OPTIONAL,
             status=Status.DEGRADED,
-            detail="Chromium 内核尚未下载",
-            remedy="playwright install chromium（约 130MB）—— 在此之前降级为导出 HTML",
+            detail="Chromium 内核尚未下载（导出功能本身尚未实现）",
+            remedy="导出上线后需要它；可提前执行 playwright install chromium（约 130MB）",
         )
     return Check(
-        name="PDF 导出",
+        name="PDF 渲染依赖",
         level=Level.OPTIONAL,
         status=Status.OK,
-        detail="Playwright + Chromium 可用",
+        detail="Playwright + Chromium 可用（导出功能尚未实现，依赖已就位）",
     )
 
 
@@ -239,7 +239,7 @@ def _check_web() -> Check:
             level=Level.OPTIONAL,
             status=Status.MISSING,
             detail=f"缺少 {', '.join(missing)}",
-            remedy='pip install "qbank[web]" —— 缺失时仅 CLI 可用',
+            remedy='pip install "qbank[web]" —— 缺失时只能用命令行',
         )
     return Check(name="Web 界面", level=Level.OPTIONAL, status=Status.OK, detail="FastAPI 可用")
 

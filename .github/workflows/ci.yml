@@ -29,7 +29,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[web,dev,pdf]"
+          python -m pip install -e ".[web,dev]"
 
       - name: Lint
         run: |
@@ -43,14 +43,9 @@ jobs:
       - name: Toolchain doctor
         run: python -m qbank.cli doctor
 
-      - name: Test (不含 PDF)
+      # 保留 -m "not pdf"：导出功能（M5）上线后，PDF 相关测试需要 Chromium
+      # 内核，届时再加回「只在 Linux 上装 chromium 并跑 pytest -m pdf」两步。
+      # 现在还没有任何测试带 pdf 标记，贸然跑 `pytest -m pdf` 会因「未选中任何
+      # 测试」退出码 5 而让 CI 变红。
+      - name: Test
         run: pytest -m "not pdf" --cov --cov-report=term-missing
-
-      # Chromium 内核较大，只在 Linux 上验证 PDF 链路，节省 CI 时间
-      - name: Install Chromium (linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: python -m playwright install --with-deps chromium
-
-      - name: Test PDF (linux only)
-        if: matrix.os == 'ubuntu-latest'
-        run: pytest -m pdf
