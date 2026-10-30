@@ -12,7 +12,11 @@ import pytest
 
 MODULES = [
     "qbank.config",
+    "qbank.core.enums",
     "qbank.core.content.segment",
+    "qbank.core.content.math",
+    "qbank.core.content.text",
+    "qbank.core.content.render",
 ]
 
 
