@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="empty">
+  <h2>还没有课程</h2>
+  <p>题库按课程组织。先建一门课，再往里加题或批量导入。</p>
+  <form method="post" action="/courses" style="max-width: 360px; margin: 20px auto; text-align: left">
+    <div class="field">
+      <label for="name">课程名</label>
+      <input id="name" name="name" type="text" placeholder="如：数据结构" required autofocus>
+    </div>
+    <div class="field">
+      <label for="code">课程代码（可选）</label>
+      <input id="code" name="code" type="text" placeholder="如：CS201">
+    </div>
+    <button type="submit" class="btn-primary">创建课程</button>
+  </form>
+</div>
+{% endblock %}

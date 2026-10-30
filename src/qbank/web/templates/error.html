@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ status_code }}{% endblock %}
+{% block content %}
+<div class="empty">
+  <h2>
+    {% if status_code == 404 %}没有找到这个页面
+    {% elif status_code == 409 %}和已有数据冲突
+    {% elif status_code == 400 %}请求有问题
+    {% else %}出错了（{{ status_code }}）
+    {% endif %}
+  </h2>
+  {% if detail %}<p>{{ detail }}</p>{% endif %}
+  <p><a class="btn" href="/questions">回到题库</a></p>
+</div>
+{% endblock %}

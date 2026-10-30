@@ -28,6 +28,9 @@ exports/
 # ---- 打包
 *.spec.bak
 
+# ---- 本地工具配置（launch.json 里是本机的 .venv 路径，不适合共享）
+.claude/
+
 # ---- 编辑器 / 系统
 .vscode/
 .idea/

@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ "新建题目" if mode == "new" else "编辑题目" }}</h1>
+  <span class="sub">{{ course.name }}</span>
+  <span style="flex:1"></span>
+  {% if mode == "edit" %}
+    <a class="btn btn-quiet" href="/questions/{{ question.id }}">取消</a>
+  {% else %}
+    <a class="btn btn-quiet" href="/questions?course_id={{ course.id }}">取消</a>
+  {% endif %}
+</div>
+
+{% if errors.messages %}
+<div class="flash error">
+  表单有 {{ errors.messages | length }} 处需要修改：
+  <ul>{% for message in errors.messages %}<li>{{ message }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" action="{{ action }}">
+
+<fieldset>
+  <legend>基本信息</legend>
+  <div class="field-row">
+    <div class="field {% if errors.fields.type %}invalid{% endif %}" style="flex:0 0 160px">
+      <label for="type">题型</label>
+      <select id="type" name="type" data-type-switch>
+        {% for kind in types %}
+          <option value="{{ kind.value }}" {% if values.type == kind.value %}selected{% endif %}>
+            {{ kind.label }}
+          </option>
+        {% endfor %}
+      </select>
+      {% if errors.fields.type %}<div class="error">{{ errors.fields.type }}</div>{% endif %}
+    </div>
+    <div class="field" style="flex:2">
+      <label for="chapter">章节</label>
+      <input id="chapter" name="chapter" type="text" list="chapter-list"
+             value="{{ values.chapter }}" placeholder="如：第3章 控制结构/3.2 循环结构">
+      <datalist id="chapter-list">
+        {% for chapter in chapters %}<option value="{{ chapter.path }}"></option>{% endfor %}
+      </datalist>
+      <div class="hint">用 / 分隔层级；填一个不存在的路径会自动创建</div>
+    </div>
+    <div class="field" style="flex:0 0 120px">
+      <label for="difficulty">难度</label>
+      <select id="difficulty" name="difficulty">
+        {% for level in difficulties %}
+          <option value="{{ level.value }}"
+                  {% if values.difficulty|int == level.value %}selected{% endif %}>
+            {{ level.value }} · {{ level.label }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field" style="flex:0 0 100px">
+      <label for="score">分值</label>
+      <input id="score" name="score" type="number" step="0.5" min="0" value="{{ values.score }}">
+      <div class="hint">留空＝组卷时定</div>
+    </div>
+    <div class="field" style="flex:0 0 110px">
+      <label for="est_minutes">预计用时</label>
+      <input id="est_minutes" name="est_minutes" type="number" min="0"
+             value="{{ values.est_minutes }}" placeholder="分钟">
+    </div>
+    <div class="field" style="flex:0 0 120px">
+      <label for="status">状态</label>
+      <select id="status" name="status">
+        {% for state in statuses %}
+          <option value="{{ state.value }}" {% if values.status == state.value %}selected{% endif %}>
+            {{ state.label }}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="hint">自动组卷只抽「启用」</div>
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field" style="flex:2">
+      <label for="tags">标签</label>
+      <input id="tags" name="tags" type="text" list="tag-list" value="{{ values.tags }}"
+             placeholder="循环、边界条件">
+      <datalist id="tag-list">
+        {% for name in known_tags %}<option value="{{ name }}"></option>{% endfor %}
+      </datalist>
+      <div class="hint">逗号、顿号或空格分隔；不存在的标签会自动创建</div>
+    </div>
+    <div class="field">
+      <label for="source">来源</label>
+      <input id="source" name="source" type="text" value="{{ values.source }}"
+             placeholder="如：2025 期末">
+    </div>
+    <div class="field">
+      <label for="external_id">编号</label>
+      <input id="external_id" name="external_id" type="text" value="{{ values.external_id }}"
+             placeholder="如：2025-final-01">
+      <div class="hint">重复导入时据此识别同一道题</div>
+    </div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>题干</legend>
+  <div class="field {% if errors.fields.stem %}invalid{% endif %}" style="margin-bottom:0">
+    <div class="editor-split">
+      <div>
+        <textarea id="stem" name="stem" rows="12" data-preview="stem-preview" data-images
+                  placeholder="支持 Markdown、LaTeX 公式（$x^2$）、表格、代码块。&#10;图片可以直接 Ctrl+V 粘贴或拖进来。">{{ values.stem }}</textarea>
+        <div class="hint">
+          行内公式写 <code>$x^2$</code>（两侧不要留空格），独立公式写 <code>$$…$$</code>。
+          图片直接粘贴。
+        </div>
+      </div>
+      <div class="preview-pane rendered" id="stem-preview">
+        <p class="placeholder">在左侧输入内容，这里会显示渲染效果。</p>
+      </div>
+    </div>
+    {% if errors.fields.stem %}<div class="error">{{ errors.fields.stem }}</div>{% endif %}
+  </div>
+</fieldset>
+
+{# ---------------------------------------------------------- 选择题 #}
+<fieldset data-for-type="single_choice multiple_choice" data-repeater>
+  <legend>选项</legend>
+  {% if errors.fields.options %}<div class="flash error">{{ errors.fields.options }}</div>{% endif %}
+  {% if errors.fields.correct %}<div class="flash error">{{ errors.fields.correct }}</div>{% endif %}
+  <div class="option-rows" data-rows>
+    {% for option in values.options %}
+      <div class="option-row" data-row>
+        <span class="pick">
+          <input type="{{ 'radio' if values.type == 'single_choice' else 'checkbox' }}"
+                 name="correct" value="{{ option.label }}"
+                 {% if option.is_correct %}checked{% endif %}
+                 title="标记为正确选项">
+        </span>
+        <input class="label-input" type="text" name="option_label" maxlength="2"
+               value="{{ option.label }}" aria-label="选项标号">
+        <textarea name="option_content" rows="1" aria-label="选项内容"
+                  data-images>{{ option.content }}</textarea>
+        <button type="button" class="btn btn-sm btn-quiet" data-remove-row
+                title="删除这个选项">✕</button>
+      </div>
+    {% endfor %}
+  </div>
+  <template>
+    <div class="option-row" data-row>
+      <span class="pick">
+        <input type="{{ 'radio' if values.type == 'single_choice' else 'checkbox' }}"
+               name="correct" value="" title="标记为正确选项">
+      </span>
+      <input class="label-input" type="text" name="option_label" maxlength="2"
+             value="" aria-label="选项标号">
+      <textarea name="option_content" rows="1" aria-label="选项内容" data-images></textarea>
+      <button type="button" class="btn btn-sm btn-quiet" data-remove-row>✕</button>
+    </div>
+  </template>
+  <div class="toolbar" style="margin: 10px 0 0">
+    <button type="button" class="btn btn-sm" data-add-row>添加选项</button>
+    <label style="margin-left:auto">
+      <input type="checkbox" name="shuffle_ok" {% if values.shuffle_ok %}checked{% endif %}>
+      允许生成 A/B 卷时打乱选项顺序
+    </label>
+  </div>
+  <div class="hint" style="margin-top:6px; color: var(--text-dim); font-size:12px">
+    左侧圆点/方框标记正确选项。标号留空时会自动续上一个字母。
+  </div>
+</fieldset>
+
+{# ---------------------------------------------------------- 判断题 #}
+<fieldset data-for-type="true_false">
+  <legend>正确答案</legend>
+  <label style="margin-right:16px">
+    <input type="radio" name="tf_correct" value="true"
+           {% if values.tf_correct == 'true' %}checked{% endif %}> 正确
+  </label>
+  <label>
+    <input type="radio" name="tf_correct" value="false"
+           {% if values.tf_correct == 'false' %}checked{% endif %}> 错误
+  </label>
+</fieldset>
+
+{# ---------------------------------------------------------- 填空题 #}
+<fieldset data-for-type="fill_blank" data-repeater>
+  <legend>各空答案</legend>
+  {% if errors.fields.blank_answer %}
+    <div class="flash error">{{ errors.fields.blank_answer }}</div>
+  {% endif %}
+  <div data-rows>
+    {% for blank in values.blanks %}
+      <div class="option-row" data-row>
+        <span class="pick" data-row-number>{{ loop.index }}</span>
+        <input type="text" name="blank_answer" value="{{ blank.answers }}" style="flex:1"
+               placeholder="答案；多个可接受答案用 / 分隔，如 北京/首都">
+        <select name="blank_match" style="flex:0 0 120px">
+          <option value="exact" {% if blank.match == 'exact' %}selected{% endif %}>完全匹配</option>
+          <option value="ignore_case" {% if blank.match == 'ignore_case' %}selected{% endif %}>忽略大小写</option>
+          <option value="numeric" {% if blank.match == 'numeric' %}selected{% endif %}>数值</option>
+          <option value="regex" {% if blank.match == 'regex' %}selected{% endif %}>正则</option>
+        </select>
+        <input type="text" name="blank_tolerance" value="{{ blank.tolerance }}"
+               style="flex:0 0 90px" placeholder="误差" title="仅数值判分时有效">
+        <button type="button" class="btn btn-sm btn-quiet" data-remove-row>✕</button>
+      </div>
+    {% endfor %}
+  </div>
+  <template>
+    <div class="option-row" data-row>
+      <span class="pick" data-row-number></span>
+      <input type="text" name="blank_answer" value="" style="flex:1"
+             placeholder="答案；多个可接受答案用 / 分隔">
+      <select name="blank_match" style="flex:0 0 120px">
+        <option value="exact">完全匹配</option>
+        <option value="ignore_case">忽略大小写</option>
+        <option value="numeric">数值</option>
+        <option value="regex">正则</option>
+      </select>
+      <input type="text" name="blank_tolerance" value="" style="flex:0 0 90px" placeholder="误差">
+      <button type="button" class="btn btn-sm btn-quiet" data-remove-row>✕</button>
+    </div>
+  </template>
+  <div class="toolbar" style="margin:10px 0 0">
+    <button type="button" class="btn btn-sm" data-add-row>添加一空</button>
+  </div>
+  <div class="hint" style="margin-top:6px; color: var(--text-dim); font-size:12px">
+    空的个数要和题干里 <code>____</code> 的个数一致。
+  </div>
+</fieldset>
+
+{# ---------------------------------------------------------- 简答题 #}
+<fieldset data-for-type="short_answer">
+  <legend>得分点</legend>
+  <div class="field" style="margin-bottom:0">
+    <textarea name="key_points" rows="4"
+              placeholder="每行一个得分点，用于生成评分标准">{{ values.key_points }}</textarea>
+  </div>
+</fieldset>
+
+{# ---------------------------------------------------------- 编程题 #}
+<fieldset data-for-type="programming">
+  <legend>编程题设置</legend>
+  <div class="field-row">
+    <div class="field" style="flex:0 0 140px">
+      <label for="language">语言</label>
+      <input id="language" name="language" type="text" value="{{ values.language }}"
+             placeholder="python / c / java">
+      <div class="hint">留空表示不限</div>
+    </div>
+    <div class="field" style="flex:2">
+      <label for="signature">函数签名</label>
+      <input id="signature" name="signature" type="text" value="{{ values.signature }}"
+             placeholder="def quick_sort(arr: list[int]) -> None">
+    </div>
+  </div>
+  <div class="field">
+    <label for="starter_code">初始代码</label>
+    <textarea id="starter_code" name="starter_code" rows="6">{{ values.starter_code }}</textarea>
+  </div>
+  <div class="hint" style="color: var(--text-dim); font-size:12px">
+    测试用例目前只保存、不判题（判题留给后续 Web 端）。
+  </div>
+</fieldset>
+
+{# ---------------------------------------------------------- 综合题 #}
+<fieldset data-for-type="comprehensive">
+  <legend>材料标题</legend>
+  <div class="field" style="margin-bottom:0">
+    <input name="material_label" type="text" value="{{ values.material_label }}"
+           placeholder="如：阅读下列程序">
+  </div>
+</fieldset>
+
+<fieldset data-for-type="comprehensive" data-repeater>
+  <legend>小问</legend>
+  {% if errors.fields.sub_stem %}<div class="flash error">{{ errors.fields.sub_stem }}</div>{% endif %}
+  <div data-rows>
+    {% for sub in values.sub_questions %}
+      <div class="sub-block" data-row>
+        <div class="sub-head">
+          <span class="n">（<span data-row-number>{{ loop.index }}</span>）</span>
+          <select name="sub_type" style="flex:0 0 130px">
+            <option value="short_answer" {% if sub.type == 'short_answer' %}selected{% endif %}>简答</option>
+            <option value="fill_blank" {% if sub.type == 'fill_blank' %}selected{% endif %}>填空</option>
+            <option value="true_false" {% if sub.type == 'true_false' %}selected{% endif %}>判断</option>
+            <option value="programming" {% if sub.type == 'programming' %}selected{% endif %}>编程</option>
+          </select>
+          <input type="number" name="sub_score" step="0.5" min="0" value="{{ sub.score }}"
+                 style="flex:0 0 90px" placeholder="分值">
+          <span style="flex:1"></span>
+          <button type="button" class="btn btn-sm btn-quiet" data-remove-row>删除这一小问</button>
+        </div>
+        <textarea name="sub_stem" rows="3" data-images
+                  placeholder="小问题干">{{ sub.stem }}</textarea>
+        <div class="field-row" style="margin-top:6px">
+          <div class="field" style="margin-bottom:0">
+            <textarea name="sub_answer" rows="2" placeholder="答案">{{ sub.answer }}</textarea>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <textarea name="sub_explanation" rows="2" placeholder="解析（可选）">{{ sub.explanation }}</textarea>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <template>
+    <div class="sub-block" data-row>
+      <div class="sub-head">
+        <span class="n">（<span data-row-number></span>）</span>
+        <select name="sub_type" style="flex:0 0 130px">
+          <option value="short_answer">简答</option>
+          <option value="fill_blank">填空</option>
+          <option value="true_false">判断</option>
+          <option value="programming">编程</option>
+        </select>
+        <input type="number" name="sub_score" step="0.5" min="0" value=""
+               style="flex:0 0 90px" placeholder="分值">
+        <span style="flex:1"></span>
+        <button type="button" class="btn btn-sm btn-quiet" data-remove-row>删除这一小问</button>
+      </div>
+      <textarea name="sub_stem" rows="3" data-images placeholder="小问题干"></textarea>
+      <div class="field-row" style="margin-top:6px">
+        <div class="field" style="margin-bottom:0">
+          <textarea name="sub_answer" rows="2" placeholder="答案"></textarea>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <textarea name="sub_explanation" rows="2" placeholder="解析（可选）"></textarea>
+        </div>
+      </div>
+    </div>
+  </template>
+  <div class="toolbar" style="margin:10px 0 0">
+    <button type="button" class="btn btn-sm" data-add-row>添加小问</button>
+  </div>
+</fieldset>
+
+{# ---------------------------------------------------------- 答案与解析 #}
+<fieldset>
+  <legend>答案与解析</legend>
+  <div class="field">
+    <label for="answer">参考答案</label>
+    <textarea id="answer" name="answer" rows="3" data-images
+              data-preview="answer-preview">{{ values.answer }}</textarea>
+    <div class="preview-pane rendered" id="answer-preview" style="margin-top:6px; min-height:0">
+      <p class="placeholder">答案的渲染效果会显示在这里。</p>
+    </div>
+  </div>
+  <div class="field">
+    <label for="explanation">解析</label>
+    <textarea id="explanation" name="explanation" rows="4" data-images>{{ values.explanation }}</textarea>
+  </div>
+  <div class="field" data-for-type="short_answer comprehensive programming">
+    <label for="scoring_rubric">评分标准</label>
+    <textarea id="scoring_rubric" name="scoring_rubric" rows="3">{{ values.scoring_rubric }}</textarea>
+  </div>
+</fieldset>
+
+{% if mode == "edit" %}
+<fieldset>
+  <legend>本次改动</legend>
+  <div class="field" style="margin-bottom:0">
+    <input name="note" type="text" placeholder="如：修正答案 / 换了配图（可留空）">
+    <div class="hint">保存前会自动把当前内容存入修改历史，这段说明会记在那条历史上</div>
+  </div>
+</fieldset>
+{% endif %}
+
+<div class="toolbar">
+  <button type="submit" class="btn-primary">{{ "创建" if mode == "new" else "保存" }}</button>
+  {% if mode == "edit" %}
+    <a class="btn btn-quiet" href="/questions/{{ question.id }}">取消</a>
+  {% endif %}
+</div>
+
+</form>
+{% endblock %}

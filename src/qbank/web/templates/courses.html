@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>课程</h1>
+  <span class="sub">题库按课程组织</span>
+</div>
+
+<form class="card" method="post" action="/courses">
+  <div class="field-row" style="align-items:flex-end">
+    <div class="field" style="flex:2">
+      <label for="name">新建课程</label>
+      <input id="name" name="name" type="text" placeholder="如：数据结构" required>
+    </div>
+    <div class="field">
+      <label for="code">课程代码（可选）</label>
+      <input id="code" name="code" type="text" placeholder="CS201">
+    </div>
+    <div class="field" style="flex:0">
+      <button type="submit" class="btn-primary">创建</button>
+    </div>
+  </div>
+</form>
+
+{% if not courses %}
+  <div class="empty"><h2>还没有课程</h2><p>用上面的表单创建第一门课。</p></div>
+{% endif %}
+
+{% for row in courses %}
+<div class="card">
+  <div class="toolbar" style="margin-bottom:10px">
+    <strong style="font-size:15px">{{ row.course.name }}</strong>
+    {% if row.course.code %}<span class="badge">{{ row.course.code }}</span>{% endif %}
+    <span class="badge">{{ row.total }} 道题</span>
+    {% if row.all_levels > row.total %}
+      <span class="badge">含小问共 {{ row.all_levels }} 条</span>
+    {% endif %}
+    <span style="flex:1"></span>
+    <a class="btn btn-sm" href="/questions?course_id={{ row.course.id }}">查看题目</a>
+    <a class="btn btn-sm" href="/chapters?course_id={{ row.course.id }}">章节</a>
+    <a class="btn btn-sm" href="/import?course_id={{ row.course.id }}">导入</a>
+  </div>
+
+  <details>
+    <summary style="cursor:pointer; color: var(--text-dim); font-size:13px">重命名 / 删除</summary>
+    <div style="margin-top:10px; display:flex; gap:20px; flex-wrap:wrap">
+      <form method="post" action="/courses/{{ row.course.id }}/rename"
+            style="display:flex; gap:8px; align-items:flex-end">
+        <div class="field" style="margin-bottom:0">
+          <label>新名称</label>
+          <input name="name" type="text" value="{{ row.course.name }}" required>
+        </div>
+        <button type="submit" class="btn btn-sm">重命名</button>
+      </form>
+
+      <form method="post" action="/courses/{{ row.course.id }}/delete"
+            style="display:flex; gap:8px; align-items:flex-end">
+        <div class="field" style="margin-bottom:0">
+          <label style="color: var(--danger)">
+            删除课程及其 {{ row.all_levels }} 条题目 —— 输入课程名确认
+          </label>
+          <input name="confirm_name" type="text" placeholder="{{ row.course.name }}" required>
+          <div class="hint">不可撤销。建议先导出备份。</div>
+        </div>
+        <button type="submit" class="btn btn-sm btn-danger">永久删除</button>
+      </form>
+    </div>
+  </details>
+</div>
+{% endfor %}
+
+{% endblock %}

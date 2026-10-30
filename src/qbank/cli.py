@@ -142,6 +142,43 @@ def doctor() -> None:
 
 
 @app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", help="监听地址")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    open_browser: Annotated[
+        bool, typer.Option("--open/--no-open", help="启动后自动打开浏览器")
+    ] = True,
+    reload: Annotated[bool, typer.Option("--reload", help="改代码自动重启（开发用）")] = False,
+) -> None:
+    """启动图形界面。
+
+    默认只监听 ``127.0.0.1``——这是本地客户端，不该一启动就暴露在局域网里。
+    真要让同事访问，显式写 ``--host 0.0.0.0``，并且清楚当前还没有任何鉴权。
+    """
+    try:
+        from qbank.web.app import serve as run_server
+    except ImportError as exc:
+        typer.secho('缺少 Web 依赖。安装：pip install "qbank[web]"', fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{port}/"
+    if host == "0.0.0.0":
+        typer.secho(
+            "正在监听所有网卡：局域网内任何人都能访问这个题库，而且目前没有鉴权。",
+            fg=typer.colors.YELLOW,
+        )
+    typer.secho(f"界面地址：{url}", fg=typer.colors.GREEN, bold=True)
+    typer.secho("按 Ctrl+C 停止。", fg=typer.colors.BRIGHT_BLACK)
+    if open_browser and not reload:
+        # reload 模式下进程会重启，自动开浏览器会开好几个
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    run_server(host=host, port=port, reload=reload)
+
+
+@app.command()
 def info() -> None:
     """显示题库位置与规模。"""
     context = _open()

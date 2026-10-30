@@ -22,6 +22,7 @@ MODULES = [
     "qbank.exchange.pandoc",
     "qbank.exchange.importers.sections",
     "qbank.exchange.importers.template",
+    "qbank.web.forms",
 ]
 
 

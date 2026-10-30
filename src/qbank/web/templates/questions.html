@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ course.name }}</h1>
+  <span class="sub">
+    共 {{ result.total }} 道
+    {% if nav.query %}· 搜索「{{ nav.query }}」{% endif %}
+    {% if nav.chapter_id %}· 含子章节{% endif %}
+  </span>
+</div>
+
+{# 筛选条。整页状态都在 URL 里，所以「数据结构第2章的难题」可以收藏成书签。 #}
+<form class="card" method="get" action="/questions">
+  <input type="hidden" name="course_id" value="{{ course.id }}">
+  {% if filters.chapter_id %}<input type="hidden" name="chapter_id" value="{{ filters.chapter_id }}">{% endif %}
+  {% if filters.unchaptered %}<input type="hidden" name="unchaptered" value="1">{% endif %}
+  {# 搜索框只在顶栏有一个。这里用隐藏字段把查询词带上，
+     这样「先搜索、再按题型收窄」不会把搜索词丢掉。 #}
+  <input type="hidden" name="q" value="{{ filters.q or '' }}">
+  <div class="field-row" style="align-items: flex-end">
+    <div class="field">
+      <label for="f-type">题型</label>
+      <select id="f-type" name="type">
+        <option value="">全部</option>
+        {% for kind in types %}
+          <option value="{{ kind.value }}" {% if filters.type == kind.value %}selected{% endif %}>
+            {{ kind.label }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-diff">难度</label>
+      <select id="f-diff" name="difficulty">
+        <option value="">全部</option>
+        {% for level in difficulties %}
+          <option value="{{ level.value }}"
+                  {% if filters.difficulty == level.value %}selected{% endif %}>
+            {{ level.value }} · {{ level.label }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-status">状态</label>
+      <select id="f-status" name="status">
+        <option value="">全部</option>
+        {% for state in statuses %}
+          <option value="{{ state.value }}" {% if filters.status == state.value %}selected{% endif %}>
+            {{ state.label }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if all_tags %}
+    <div class="field">
+      <label for="f-tag">标签</label>
+      <select id="f-tag" name="tag" multiple size="1" style="min-width: 140px">
+        {% for tag in all_tags %}
+          <option value="{{ tag.name }}" {% if tag.name in selected_tag_names %}selected{% endif %}>
+            {{ tag.name }}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="hint">按住 ⌘ / Ctrl 可多选（同时具备）</div>
+    </div>
+    {% endif %}
+    <div class="field" style="flex: 0">
+      <button type="submit" class="btn-primary">筛选</button>
+    </div>
+    {% if filters.q or filters.type or filters.difficulty or filters.status or selected_tag_names %}
+    <div class="field" style="flex: 0">
+      <a class="btn btn-quiet" href="/questions?course_id={{ course.id }}">清除</a>
+    </div>
+    {% endif %}
+  </div>
+</form>
+
+{% if not rows %}
+  <div class="empty">
+    <h2>没有符合条件的题目</h2>
+    {% if filters.q %}
+      <p>换个关键词试试。搜索会匹配题干、答案、解析和标签，支持单字（如「栈」「图」）。</p>
+    {% else %}
+      <p>这门课下还没有题目。</p>
+    {% endif %}
+    <p>
+      <a class="btn btn-primary" href="/questions/new?course_id={{ course.id }}">手动新建</a>
+      <a class="btn" href="/import?course_id={{ course.id }}">批量导入</a>
+    </p>
+  </div>
+{% else %}
+  <div class="q-list">
+    {% for row in rows %}
+      <a class="q-item" href="/questions/{{ row.id }}">
+        <div class="meta">
+          {% with question = row.question %}
+            {% include "partials/question_meta.html" %}
+          {% endwith %}
+        </div>
+        <div class="stem rendered">{{ row.excerpt_html | safe }}</div>
+      </a>
+    {% endfor %}
+  </div>
+
+  {% if total_pages > 1 %}
+  <nav class="pager">
+    {% if page > 1 %}
+      <a class="btn" href="/questions?{{ query_string }}&page={{ page - 1 }}">上一页</a>
+    {% else %}
+      <button class="btn" disabled>上一页</button>
+    {% endif %}
+    <span class="info">第 {{ page }} / {{ total_pages }} 页</span>
+    {% if page < total_pages %}
+      <a class="btn" href="/questions?{{ query_string }}&page={{ page + 1 }}">下一页</a>
+    {% else %}
+      <button class="btn" disabled>下一页</button>
+    {% endif %}
+  </nav>
+  {% endif %}
+{% endif %}
+
+{% endblock %}

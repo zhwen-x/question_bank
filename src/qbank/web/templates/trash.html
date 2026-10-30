@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>回收站</h1>
+  <span class="sub">{{ rows | length }} 道题</span>
+</div>
+
+{% if not rows %}
+  <div class="empty"><h2>回收站是空的</h2><p>删除的题目会先进这里，可以恢复。</p></div>
+{% else %}
+  <div class="q-list">
+    {% for row in rows %}
+      <div class="q-item">
+        <div class="meta">
+          {% with question = row.question %}{% include "partials/question_meta.html" %}{% endwith %}
+          <span style="flex:1"></span>
+          <span class="badge">
+            删除于 {{ row.question.deleted_at.strftime("%Y-%m-%d %H:%M") }}
+          </span>
+          <form method="post" action="/questions/{{ row.id }}/restore" style="display:inline">
+            <button type="submit" class="btn btn-sm">恢复</button>
+          </form>
+          <a class="btn btn-sm btn-quiet" href="/questions/{{ row.id }}">查看</a>
+        </div>
+        <div class="stem rendered">{{ row.excerpt_html | safe }}</div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <h3 style="margin:0 0 4px; font-size:14px; color: var(--danger)">清空回收站</h3>
+    <p class="hint" style="color: var(--text-dim); font-size:12px; margin-top:0">
+      这是本应用里唯一真正不可撤销的操作。请输入「清空」二字确认。
+    </p>
+    <form method="post" action="/trash/purge" style="display:flex; gap:10px; align-items:flex-end">
+      {% if nav.course %}<input type="hidden" name="course_id" value="{{ nav.course.id }}">{% endif %}
+      <div class="field" style="margin-bottom:0">
+        <input name="confirm" type="text" placeholder="清空" required style="width:120px">
+      </div>
+      <button type="submit" class="btn btn-danger">
+        永久删除这 {{ rows | length }} 道题
+      </button>
+    </form>
+  </div>
+{% endif %}
+
+{% endblock %}

@@ -11,9 +11,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from qbank import config
+from qbank.app import AppContext
 from qbank.core.db import init_schema, make_memory_engine, make_session_factory
 
 
@@ -50,3 +52,27 @@ def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
     with session_factory() as active:
         yield active
         active.rollback()
+
+
+@pytest.fixture
+def web_context(
+    isolate_data_dir: config.Paths, session_factory: sessionmaker[Session]
+) -> AppContext:
+    """给 Web 测试用的应用上下文。
+
+    用内存库 + 临时数据目录，确保测试绝不碰用户真实题库——而 Web 层会往
+    assets 目录写文件，这一点尤其要紧。
+    """
+    return AppContext(
+        paths=isolate_data_dir,
+        engine=session_factory.kw["bind"],
+        session_factory=session_factory,
+    )
+
+
+@pytest.fixture
+def client(web_context: AppContext) -> Iterator[TestClient]:
+    from qbank.web.app import create_app
+
+    with TestClient(create_app(web_context)) as test_client:
+        yield test_client

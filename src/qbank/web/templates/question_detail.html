@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+{% set q = view.question %}
+
+{% if q.is_deleted %}
+<div class="flash warn">
+  这道题在回收站里。
+  <form method="post" action="/questions/{{ q.id }}/restore" style="display:inline">
+    <button type="submit" class="btn btn-sm">恢复</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="page-head">
+  <h1>{{ view.draft.type.label }}</h1>
+  <span class="sub">
+    {% if view.total_score %}{{ view.total_score | round(1) }} 分 · {% endif %}
+    难度 {{ q.difficulty.value }}（{{ q.difficulty.label }}）
+    {% if view.draft.est_minutes %} · 约 {{ view.draft.est_minutes }} 分钟{% endif %}
+  </span>
+  <span style="flex:1"></span>
+  <a class="btn btn-primary" href="/questions/{{ q.id }}/edit">编辑</a>
+  <form method="post" action="/questions/{{ q.id }}/delete" style="display:inline"
+        data-confirm="移入回收站？可以再恢复。">
+    <button type="submit" class="btn btn-danger">删除</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="meta" style="margin-bottom: 12px; display:flex; gap:8px; flex-wrap:wrap">
+    {% with question = q %}{% include "partials/question_meta.html" %}{% endwith %}
+  </div>
+
+  <div class="rendered">{{ view.stem_html | safe }}</div>
+
+  {% if view.options %}
+    <div style="margin-top: 14px">
+      {% for option in view.options %}
+        <div style="display:flex; gap:10px; padding:4px 0">
+          <span class="badge {% if option.is_correct %}active{% endif %}"
+                style="min-width: 28px; text-align:center">{{ option.label }}</span>
+          <div class="rendered" style="flex:1">{{ option.content_html | safe }}</div>
+          {% if option.is_correct %}<span style="color: var(--ok)">✓</span>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if view.true_false is not none %}
+    <p style="margin-top: 14px">
+      正确答案：<strong>{{ "正确" if view.true_false else "错误" }}</strong>
+    </p>
+  {% endif %}
+
+  {% if view.blanks %}
+    <dl class="kv" style="margin-top: 14px">
+      {% for blank in view.blanks %}
+        <dt>第 {{ blank.index }} 空</dt>
+        <dd>
+          {{ blank.answers | join(" 或 ") }}
+          {% if blank.match != "exact" %}<span class="badge">{{ blank.match }}</span>{% endif %}
+        </dd>
+      {% endfor %}
+    </dl>
+  {% endif %}
+
+  {% if view.programming %}
+    <dl class="kv" style="margin-top: 14px">
+      {% if view.programming.language %}
+        <dt>语言</dt><dd>{{ view.programming.language }}</dd>
+      {% endif %}
+      {% if view.programming.signature %}
+        <dt>函数签名</dt><dd><code>{{ view.programming.signature }}</code></dd>
+      {% endif %}
+      <dt>限制</dt>
+      <dd>{{ view.programming.time_limit_ms }} ms / {{ view.programming.memory_limit_mb }} MB</dd>
+    </dl>
+    {% if view.programming.starter_code %}
+      <p style="margin-bottom:4px; color: var(--text-dim); font-size:13px">初始代码</p>
+      <pre>{{ view.programming.starter_code }}</pre>
+    {% endif %}
+    {% if view.programming.test_cases %}
+      <p style="margin:10px 0 4px; color: var(--text-dim); font-size:13px">
+        测试用例（{{ view.programming.test_cases | length }} 个，
+        其中 {{ view.programming.test_cases | selectattr("hidden") | list | length }} 个隐藏）
+      </p>
+      <table class="rendered" style="width:100%">
+        <thead><tr><th>名称</th><th>输入</th><th>期望输出</th><th>隐藏</th></tr></thead>
+        <tbody>
+        {% for case in view.programming.test_cases %}
+          <tr>
+            <td>{{ case.name or "—" }}</td>
+            <td><code>{{ case.input }}</code></td>
+            <td><code>{{ case.expected }}</code></td>
+            <td>{{ "是" if case.hidden else "否" }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% endif %}
+</div>
+
+{% for sub in view.sub_questions %}
+  <div class="card">
+    <div class="meta" style="margin-bottom:8px">
+      <span class="badge type">（{{ sub.index }}）{{ sub.type_label }}</span>
+      {% if sub.score %}<span class="badge score">{{ sub.score | round(1) }} 分</span>{% endif %}
+    </div>
+    <div class="rendered">{{ sub.stem_html | safe }}</div>
+    {% if sub.answer_html %}
+      <div style="margin-top:10px; color: var(--ok)">
+        <strong>答案</strong>
+        <div class="rendered">{{ sub.answer_html | safe }}</div>
+      </div>
+    {% endif %}
+    {% if sub.explanation_html %}
+      <div style="margin-top:8px; color: var(--text-dim)">
+        <strong>解析</strong>
+        <div class="rendered">{{ sub.explanation_html | safe }}</div>
+      </div>
+    {% endif %}
+  </div>
+{% endfor %}
+
+{% if view.answer_html or view.explanation_html or view.rubric_html or view.key_points %}
+<div class="card">
+  {% if view.answer_html %}
+    <h3 style="margin:0 0 6px; font-size:14px; color: var(--ok)">答案</h3>
+    <div class="rendered">{{ view.answer_html | safe }}</div>
+  {% endif %}
+  {% if view.explanation_html %}
+    <h3 style="margin:14px 0 6px; font-size:14px; color: var(--text-dim)">解析</h3>
+    <div class="rendered">{{ view.explanation_html | safe }}</div>
+  {% endif %}
+  {% if view.key_points %}
+    <h3 style="margin:14px 0 6px; font-size:14px; color: var(--text-dim)">得分点</h3>
+    <ul>{% for point in view.key_points %}<li>{{ point }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if view.rubric_html %}
+    <h3 style="margin:14px 0 6px; font-size:14px; color: var(--text-dim)">评分标准</h3>
+    <div class="rendered">{{ view.rubric_html | safe }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <dl class="kv">
+    <dt>所属章节</dt><dd>{{ view.draft.chapter or "未归类" }}</dd>
+    {% if view.draft.source %}<dt>来源</dt><dd>{{ view.draft.source }}</dd>{% endif %}
+    {% if view.draft.external_id %}<dt>编号</dt><dd><code>{{ view.draft.external_id }}</code></dd>{% endif %}
+    <dt>被组卷次数</dt><dd>{{ usage_count }}</dd>
+    <dt>当前版本</dt><dd>第 {{ q.revision }} 版</dd>
+    <dt>创建 / 更新</dt>
+    <dd>{{ q.created_at.strftime("%Y-%m-%d %H:%M") }} / {{ q.updated_at.strftime("%Y-%m-%d %H:%M") }}</dd>
+    <dt>内部 id</dt><dd><code>{{ q.id }}</code></dd>
+  </dl>
+</div>
+
+{% if revisions %}
+<div class="card">
+  <h3 style="margin:0 0 8px; font-size:14px">修改历史</h3>
+  <p class="hint" style="color: var(--text-dim); font-size:12px; margin-top:0">
+    「第 N 版」是那次改动<strong>之前</strong>的状态，回滚即恢复到它。回滚本身也会留下记录。
+  </p>
+  <table class="rendered" style="width:100%">
+    <thead><tr><th>版本</th><th>时间</th><th>改动说明</th><th></th></tr></thead>
+    <tbody>
+    {% for revision in revisions | reverse %}
+      <tr>
+        <td>第 {{ revision.revision }} 版</td>
+        <td>{{ revision.changed_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ revision.note or "—" }}</td>
+        <td>
+          <form method="post" action="/questions/{{ q.id }}/rollback"
+                data-confirm="回滚到第 {{ revision.revision }} 版？当前内容会先存入历史。">
+            <input type="hidden" name="revision" value="{{ revision.revision }}">
+            <button type="submit" class="btn btn-sm">回滚到此版</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}

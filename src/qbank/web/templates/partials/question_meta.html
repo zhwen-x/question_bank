@@ -1,0 +1,11 @@
+{#- 题目的元数据徽标行。列表页与详情页共用，保证两处显示一致。 -#}
+<span class="badge type">{{ question.type.label }}</span>
+<span class="badge diff-{{ question.difficulty.value }}">难度 {{ question.difficulty.value }}</span>
+{% if question.score %}<span class="badge score">{{ question.score | round(1) }} 分</span>{% endif %}
+<span class="badge {{ question.status.value }}">{{ question.status.label }}</span>
+{% if question.chapter %}<span class="badge">{{ question.chapter.title }}</span>{% endif %}
+{% for tag in question.tags %}<span class="badge tag">#{{ tag.name }}</span>{% endfor %}
+{% if question.source %}<span class="badge">{{ question.source }}</span>{% endif %}
+{% if question.sub_questions %}
+  <span class="badge">{{ question.sub_questions | length }} 小问</span>
+{% endif %}

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ course.name }} · 章节</h1>
+  <span class="sub">{{ rows | length }} 个章节</span>
+</div>
+
+<form class="card" method="post" action="/chapters">
+  <input type="hidden" name="course_id" value="{{ course.id }}">
+  <div class="field-row" style="align-items:flex-end">
+    <div class="field" style="flex:3">
+      <label for="path">新建章节</label>
+      <input id="path" name="path" type="text" required
+             placeholder="第3章 控制结构/3.2 循环结构">
+      <div class="hint">用 / 分隔层级，缺失的上级会自动创建</div>
+    </div>
+    <div class="field" style="flex:0">
+      <button type="submit" class="btn-primary">创建</button>
+    </div>
+  </div>
+</form>
+
+{% if not rows %}
+  <div class="empty">
+    <h2>还没有章节</h2>
+    <p>也可以不建——批量导入时写在 <code>【章节】</code> 里的路径会自动创建。</p>
+  </div>
+{% else %}
+<div class="card">
+  <table class="rendered" style="width:100%">
+    <thead>
+      <tr><th>章节</th><th style="width:70px">题目</th><th style="width:300px">操作</th></tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td style="padding-left: {{ 10 + row.depth * 20 }}px">
+          {{ row.chapter.title }}
+          {% if row.depth %}<span class="badge">{{ row.chapter.path }}</span>{% endif %}
+        </td>
+        <td>{{ row.count }}</td>
+        <td>
+          <div style="display:flex; gap:6px; flex-wrap:wrap">
+            <form method="post" action="/chapters/{{ row.chapter.id }}/rename"
+                  style="display:flex; gap:4px">
+              <input name="title" type="text" value="{{ row.chapter.title }}"
+                     style="width:150px" required>
+              <button type="submit" class="btn btn-sm">改名</button>
+            </form>
+            <form method="post" action="/chapters/{{ row.chapter.id }}/move"
+                  style="display:flex; gap:4px">
+              <select name="parent_id" style="width:150px">
+                <option value="">（移到顶层）</option>
+                {% for other in rows %}
+                  {% if other.chapter.id != row.chapter.id
+                        and not other.chapter.path.startswith(row.chapter.path ~ "/") %}
+                    <option value="{{ other.chapter.id }}"
+                            {% if other.chapter.id == row.chapter.parent_id %}selected{% endif %}>
+                      {{ other.chapter.path }}
+                    </option>
+                  {% endif %}
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm">移动</button>
+            </form>
+            <form method="post" action="/chapters/{{ row.chapter.id }}/delete"
+                  data-confirm="删除章节「{{ row.chapter.title }}」？其下题目不会被删除，会移入「未归类」。">
+              <button type="submit" class="btn btn-sm btn-danger">删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint" style="color: var(--text-dim); font-size:12px; margin-bottom:0">
+    重命名和移动会自动重写整棵子树的路径。删除章节<strong>不会</strong>删除题目，
+    它们只是失去章节归属。
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}

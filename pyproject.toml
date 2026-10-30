@@ -109,6 +109,12 @@ markers = [
   "pandoc: 需要 pandoc 可用",
   "pdf: 需要 Playwright 浏览器内核已安装",
 ]
+# 把警告当错误：真实的弃用提示值得在 CI 里立刻暴露，而不是淹没在输出里。
+# 第三方库自己的噪声逐条放行，这样「放行了什么」始终是明确的。
+filterwarnings = [
+  "error",
+  "ignore:Using `httpx` with `starlette.testclient`",
+]
 
 [tool.coverage.run]
 source = ["qbank"]

@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>标签</h1>
+  <span class="sub">
+    共 {{ rows | length }} 个{% if unused %}，其中 {{ unused }} 个没有题目在用{% endif %}
+  </span>
+</div>
+
+<div class="card">
+  <form method="post" action="/tags" style="display:flex; gap:10px; align-items:flex-end">
+    <div class="field" style="margin-bottom:0; flex:2">
+      <label for="name">新建标签</label>
+      <input id="name" name="name" type="text" required placeholder="如：动态规划">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label for="category">分类</label>
+      <select id="category" name="category">
+        {% for category in categories %}
+          <option value="{{ category.value }}">{{ category.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn-primary">创建</button>
+  </form>
+</div>
+
+{% if rows | length > 1 %}
+<div class="card">
+  <h3 style="margin:0 0 4px; font-size:14px">合并同义标签</h3>
+  <p class="hint" style="color: var(--text-dim); font-size:12px; margin-top:0">
+    用久了必然出现「循环」「循环结构」「while循环」这类同义标签。合并后源标签消失，
+    题目改挂到目标标签上。
+  </p>
+  <form method="post" action="/tags/merge"
+        style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap"
+        data-confirm="合并后源标签会被删除，确定？">
+    <div class="field" style="margin-bottom:0">
+      <label for="source_id">把这个</label>
+      <select id="source_id" name="source_id" required>
+        {% for row in rows %}
+          <option value="{{ row.tag.id }}">{{ row.tag.name }}（{{ row.count }}）</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label for="target_id">合并进</label>
+      <select id="target_id" name="target_id" required>
+        {% for row in rows %}
+          <option value="{{ row.tag.id }}">{{ row.tag.name }}（{{ row.count }}）</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn">合并</button>
+  </form>
+</div>
+{% endif %}
+
+{% if not rows %}
+  <div class="empty">
+    <h2>还没有标签</h2>
+    <p>标签会在录题或导入时自动创建，也可以在上面手动建。</p>
+  </div>
+{% else %}
+<div class="card">
+  <table class="rendered" style="width:100%">
+    <thead>
+      <tr><th>标签</th><th style="width:100px">分类</th><th style="width:70px">题目</th>
+          <th style="width:230px">操作</th></tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.tag.name }}</td>
+        <td>{{ row.tag.category.label }}</td>
+        <td {% if not row.count %}style="color: var(--text-faint)"{% endif %}>{{ row.count }}</td>
+        <td>
+          <div style="display:flex; gap:6px">
+            <form method="post" action="/tags/{{ row.tag.id }}/update"
+                  style="display:flex; gap:4px">
+              <input name="name" type="text" value="{{ row.tag.name }}" style="width:110px">
+              <select name="category" style="width:90px">
+                {% for category in categories %}
+                  <option value="{{ category.value }}"
+                          {% if row.tag.category == category %}selected{% endif %}>
+                    {{ category.label }}
+                  </option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm">保存</button>
+            </form>
+            <form method="post" action="/tags/{{ row.tag.id }}/delete"
+                  data-confirm="删除标签「{{ row.tag.name }}」？题目不会被删除。">
+              <button type="submit" class="btn btn-sm btn-danger">删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if unused %}
+  <form method="post" action="/tags/clean" style="margin-top:10px"
+        data-confirm="清理 {{ unused }} 个没有题目在用的标签？">
+    <button type="submit" class="btn btn-sm">清理 {{ unused }} 个未使用的标签</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

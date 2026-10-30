@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>状态与自检</h1>
+  <span class="sub">qbank {{ version }}</span>
+</div>
+
+<div class="card">
+  <h3 style="margin:0 0 10px; font-size:14px">能力自检</h3>
+  <table class="rendered" style="width:100%">
+    <thead><tr><th style="width:40px"></th><th style="width:130px">能力</th><th>情况</th></tr></thead>
+    <tbody>
+    {% for check in checks %}
+      <tr>
+        <td style="text-align:center; font-size:16px;
+            color: {% if check.status.value == 'ok' %}var(--ok)
+                   {% elif check.status.value == 'degraded' %}var(--warn)
+                   {% else %}var(--danger){% endif %}">
+          {% if check.status.value == 'ok' %}✓{% elif check.status.value == 'degraded' %}!{% else %}✗{% endif %}
+        </td>
+        <td>
+          {{ check.name }}
+          <span class="badge">{{ "必需" if check.level.value == "required" else "可选" }}</span>
+        </td>
+        <td>
+          {{ check.detail }}
+          {% if check.remedy %}
+            <div style="color: var(--text-dim); font-size:12px; margin-top:2px">
+              → {{ check.remedy }}
+            </div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin:0 0 10px; font-size:14px">题库规模</h3>
+  <dl class="kv">
+    <dt>课程</dt><dd>{{ stats.courses }} 门</dd>
+    <dt>题目</dt>
+    <dd>
+      {{ stats.questions }} 道（不含小问）；含小问共 {{ stats.questions_all_levels }} 条
+    </dd>
+    <dt>全文索引</dt>
+    <dd>
+      {{ stats.indexed }} 条
+      {% if stats.index_stale %}
+        <span class="badge draft">与题目数不一致，建议重建</span>
+      {% endif %}
+    </dd>
+    <dt>回收站</dt><dd>{{ stats.trash }} 道</dd>
+    <dt>图片</dt>
+    <dd>
+      {{ stats.assets }} 张，占用 {{ (stats.asset_bytes / 1024 / 1024) | round(1) }} MB
+      {% if stats.missing_files %}
+        <span class="badge" style="background: var(--danger-bg); color: var(--danger)">
+          {{ stats.missing_files }} 张文件丢失
+        </span>
+      {% endif %}
+    </dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h3 style="margin:0 0 10px; font-size:14px">存放位置</h3>
+  <dl class="kv">
+    <dt>题库目录</dt><dd><code>{{ paths.root }}</code></dd>
+    <dt>数据库</dt><dd><code>{{ paths.db_file }}</code></dd>
+    <dt>图片</dt><dd><code>{{ paths.assets_dir }}</code></dd>
+    <dt>自定义模板</dt><dd><code>{{ paths.templates_dir }}</code></dd>
+    <dt>导出</dt><dd><code>{{ paths.exports_dir }}</code></dd>
+    <dt>备份</dt><dd><code>{{ paths.backups_dir }}</code></dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h3 style="margin:0 0 10px; font-size:14px">维护</h3>
+
+  <form method="post" action="/health/reindex" style="margin-bottom:14px">
+    <button type="submit" class="btn">重建全文索引</button>
+    <span class="hint" style="color: var(--text-dim); font-size:12px; margin-left:8px">
+      从备份恢复后、或发现「明明有这道题却搜不到」时跑一次
+    </span>
+  </form>
+
+  {% if stats.orphan_assets %}
+  <form method="post" action="/health/clean-assets"
+        style="display:flex; gap:10px; align-items:flex-end">
+    <div class="field" style="margin-bottom:0">
+      <label>
+        有 {{ stats.orphan_assets }} 张图片没有任何题目在引用，
+        占用 {{ (stats.orphan_bytes / 1024 / 1024) | round(1) }} MB —— 输入「清理」确认
+      </label>
+      <input name="confirm" type="text" placeholder="清理" required style="width:120px">
+      <div class="hint">
+        编辑题目时粘贴了图又没保存，就会留下这类孤儿图片
+      </div>
+    </div>
+    <button type="submit" class="btn btn-danger">删除孤儿图片</button>
+  </form>
+  {% else %}
+    <p style="color: var(--text-dim); font-size:13px; margin:0">没有孤儿图片。</p>
+  {% endif %}
+</div>
+
+{% endblock %}

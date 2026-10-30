@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ page_title or "题库" }}{% endblock %} · qbank</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar">
+    <div class="brand">qbank <small>题库</small></div>
+
+    <div class="nav-group">
+      <h3>课程</h3>
+      {% for course in nav.courses %}
+        <a class="nav-item {% if nav.course and nav.course.id == course.id %}active{% endif %}"
+           href="/questions?course_id={{ course.id }}">
+          <span>{{ course.name }}</span>
+          <span class="count">{{ nav.course_counts.get(course.id, 0) }}</span>
+        </a>
+      {% endfor %}
+      <a class="nav-item" href="/courses">
+        <span style="color: var(--text-faint)">管理课程…</span>
+      </a>
+    </div>
+
+    {% if nav.course %}
+      {% if nav.chapters %}
+      <div class="nav-group chapter-tree">
+        <h3>{{ nav.course.name }} 的章节</h3>
+        <a class="nav-item {% if not nav.chapter_id and not nav.unchaptered %}active{% endif %}"
+           href="/questions?course_id={{ nav.course.id }}">
+          <span>全部</span>
+          <span class="count">{{ nav.course_counts.get(nav.course.id, 0) }}</span>
+        </a>
+        {% for chapter in nav.chapters %}
+          <a class="nav-item {% if nav.chapter_id == chapter.id %}active{% endif %}
+                    {% if not nav.chapter_counts.get(chapter.id) %}empty{% endif %}"
+             style="padding-left: {{ 16 + chapter.depth * 14 }}px"
+             href="/questions?course_id={{ nav.course.id }}&chapter_id={{ chapter.id }}">
+            <span>{{ chapter.title }}</span>
+            <span class="count">{{ nav.chapter_counts.get(chapter.id, 0) }}</span>
+          </a>
+        {% endfor %}
+        {% if nav.unchaptered_count %}
+          <a class="nav-item {% if nav.unchaptered %}active{% endif %}"
+             href="/questions?course_id={{ nav.course.id }}&unchaptered=1">
+            <span style="color: var(--text-faint)">未归类</span>
+            <span class="count">{{ nav.unchaptered_count }}</span>
+          </a>
+        {% endif %}
+        <a class="nav-item" href="/chapters?course_id={{ nav.course.id }}">
+          <span style="color: var(--text-faint)">管理章节…</span>
+        </a>
+      </div>
+      {% else %}
+      <div class="nav-group chapter-tree">
+        <h3>{{ nav.course.name }} 的章节</h3>
+        <a class="nav-item" href="/chapters?course_id={{ nav.course.id }}">
+          <span style="color: var(--text-faint)">还没有章节，点此添加</span>
+        </a>
+      </div>
+      {% endif %}
+    {% endif %}
+
+    <div class="nav-group">
+      <h3>题库</h3>
+      <a class="nav-item {% if active == 'import' %}active{% endif %}"
+         href="/import{% if nav.course %}?course_id={{ nav.course.id }}{% endif %}">批量导入</a>
+      <a class="nav-item {% if active == 'tags' %}active{% endif %}" href="/tags">
+        <span>标签</span><span class="count">{{ nav.tag_count }}</span>
+      </a>
+      <a class="nav-item {% if active == 'trash' %}active{% endif %}" href="/trash">
+        <span>回收站</span>
+        {% if nav.trash_count %}<span class="count">{{ nav.trash_count }}</span>{% endif %}
+      </a>
+      <a class="nav-item {% if active == 'health' %}active{% endif %}" href="/health">状态与自检</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <header class="topbar">
+      <form method="get" action="/questions" role="search">
+        {% if nav.course %}<input type="hidden" name="course_id" value="{{ nav.course.id }}">{% endif %}
+        <input type="search" name="q" value="{{ nav.query or '' }}"
+               placeholder="搜题干、答案、解析、标签…" aria-label="搜索题目">
+      </form>
+      <span class="spacer" style="flex:1"></span>
+      {% if nav.course %}
+        <a class="btn btn-primary" href="/questions/new?course_id={{ nav.course.id }}">新建题目</a>
+      {% endif %}
+      <button type="button" class="btn btn-quiet" data-theme-toggle>外观</button>
+    </header>
+
+    <main class="content {% block content_class %}{% endblock %}">
+      {% for flash in flashes %}
+        <div class="flash {{ flash.level }}">{{ flash.text }}</div>
+      {% endfor %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+</body>
+</html>
