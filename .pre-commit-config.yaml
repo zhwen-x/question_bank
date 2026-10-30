@@ -1,0 +1,37 @@
+# 安装： pre-commit install
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]   # 防止题库 db / 大图片误提交
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.7
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.1
+    hooks:
+      - id: mypy
+        files: ^src/qbank/
+        additional_dependencies: [pydantic>=2.7, types-PyYAML, SQLAlchemy>=2.0.30]
+
+  - repo: local
+    hooks:
+      - id: pytest-fast
+        name: pytest (快速子集，跳过 slow/pandoc/pdf)
+        entry: pytest -q -m "not slow and not pandoc and not pdf"
+        language: system
+        pass_filenames: false
+        types: [python]
