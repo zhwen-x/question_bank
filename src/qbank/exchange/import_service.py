@@ -156,14 +156,20 @@ class ImportService:
             errors=list(report.errors),
             document=document,
         )
+        # 候选集建一次，整份文件共用。逐题重建的话，一份 300 道题的文件导入
+        # 2000 道题的库要跑 843 秒（实测）——见 DuplicateIndex 的说明。
+        duplicate_index = self.questions.build_duplicate_index(
+            course_id, sorted({draft.type for draft in report.drafts}, key=lambda t: t.value)
+        )
         for index, draft in enumerate(report.drafts, start=1):
-            images = self._count_local_images(draft)
             plan.questions.append(
                 PlannedQuestion(
                     index=index,
                     draft=draft,
-                    duplicates=self.questions.check_duplicates(course_id, draft),
-                    image_count=images,
+                    duplicates=self.questions.check_duplicates(
+                        course_id, draft, index=duplicate_index
+                    ),
+                    image_count=self._count_local_images(draft),
                 )
             )
         return plan

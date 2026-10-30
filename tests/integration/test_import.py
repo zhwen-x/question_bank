@@ -18,11 +18,12 @@ from sqlalchemy.orm import Session
 from qbank.core.enums import ConflictPolicy, QuestionType
 from qbank.core.repo.course import ChapterRepo, CourseRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
+from qbank.core.schemas import QuestionDraft
 from qbank.core.services.asset import AssetService
 from qbank.core.services.question import QuestionService
 from qbank.exchange import pandoc
 from qbank.exchange.import_service import ImportService, plan_file
-from qbank.exchange.importers.loader import read_source
+from qbank.exchange.importers.loader import read_markdown_text, read_source
 from qbank.exchange.importers.template import parse_document
 
 pytestmark = pytest.mark.pandoc
@@ -301,3 +302,90 @@ def test_markdown_example_parses_cleanly() -> None:
     report = parse_document((EXAMPLES / "导入模板示例.md").read_text(encoding="utf-8"))
     assert report.ok, [str(e) for e in report.errors]
     assert len(report.drafts) == 7
+
+
+# ------------------------------------------------- 查重的规模与正确性
+def _bulk_draft(index: int) -> QuestionDraft:
+    from qbank.core.enums import QuestionStatus
+
+    return QuestionDraft.model_validate(
+        {
+            "type": QuestionType.SINGLE_CHOICE,
+            "stem": f"第 {index} 题：下列关于数据结构第 {index} 个知识点的说法，正确的是？",
+            "payload": {
+                "type": "single_choice",
+                "options": [
+                    {"label": "A", "content": f"选项甲 {index}", "is_correct": True},
+                    {"label": "B", "content": f"选项乙 {index}"},
+                ],
+            },
+            "answer": "A",
+            "status": QuestionStatus.ACTIVE,
+        }
+    )
+
+
+@pytest.mark.slow
+def test_duplicate_index_is_built_once_per_plan(
+    session: Session, course_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """候选集必须整份文件共用，不能逐题重建。
+
+    逐题重建是 O(待导入 × 库内)，而每次都要解析一遍 Markdown。实测一份 300 道题
+    的文件导入 2000 道题的库需要 **843 秒**；建一次降到 15 秒。
+    这个测试不量时间（机器性能差异太大），而是直接数「候选集建了几次」。
+    """
+    from qbank.core.services import question as question_module
+
+    service = QuestionService(session)
+    for index in range(30):
+        service.create(course_id, _bulk_draft(index))
+
+    builds = 0
+    original = question_module.QuestionService.build_duplicate_index
+
+    def counting_build(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal builds
+        builds += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(question_module.QuestionService, "build_duplicate_index", counting_build)
+
+    source = "\n".join(
+        f"""【题型】单选  【难度】2
+【题干】第 {index} 题：下列关于数据结构第 {index} 个知识点的说法，正确的是？
+【选项】
+*A. 选项甲 {index}
+B. 选项乙 {index}
+【答案】A
+"""
+        for index in range(100, 120)
+    )
+    document = read_markdown_text(source)
+    plan = ImportService(session).plan_document(course_id, document)
+
+    assert plan.total_parsed == 20
+    assert builds == 1, f"候选集被重建了 {builds} 次，应该只建一次"
+
+
+def test_duplicate_detection_still_correct_at_scale(session: Session, course_id: str) -> None:
+    """优化不能改变判定结果：库里已有的题重新导入仍要认出「完全相同」。"""
+    service = QuestionService(session)
+    for index in range(40):
+        service.create(course_id, _bulk_draft(index))
+
+    source = "\n".join(
+        f"""【题型】单选  【难度】2
+【题干】第 {index} 题：下列关于数据结构第 {index} 个知识点的说法，正确的是？
+【选项】
+*A. 选项甲 {index}
+B. 选项乙 {index}
+【答案】A
+"""
+        for index in (3, 17, 999)
+    )
+    plan = ImportService(session).plan_document(course_id, read_markdown_text(source))
+    assert plan.total_parsed == 3
+    assert plan.exact_duplicate_count == 2, "第 3、17 题已在库里，应判为完全相同"
+    actions = [item.exact_duplicate is not None for item in plan.questions]
+    assert actions == [True, True, False]

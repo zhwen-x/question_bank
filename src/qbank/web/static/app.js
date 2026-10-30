@@ -310,3 +310,84 @@
     if (toggle) toggle.addEventListener("click", cycleTheme);
   });
 })();
+
+/* 导入页的小交互。写在主 IIFE 之外是因为它们只在这一页用到，
+ * 彼此也没有共享状态。 */
+(function () {
+  "use strict";
+
+  /* 拖放上传：只换个样式并把文件塞进 <input>，提交仍然走普通表单。
+   * 不自己发 fetch，这样「没开 JS」时拖放失效但选文件上传照常可用。 */
+  function setupDropzone(zone) {
+    const input = zone.querySelector("[data-file-input]");
+    const nameLabel = zone.querySelector("[data-file-name]");
+    if (!input) return;
+
+    function showName() {
+      if (!nameLabel) return;
+      const file = input.files && input.files[0];
+      nameLabel.textContent = file ? file.name : "还没有选择文件";
+      nameLabel.style.color = file ? "" : "var(--text-faint)";
+    }
+
+    input.addEventListener("change", showName);
+    ["dragenter", "dragover"].forEach((name) =>
+      zone.addEventListener(name, (event) => {
+        event.preventDefault();
+        zone.classList.add("over");
+      })
+    );
+    ["dragleave", "drop"].forEach((name) =>
+      zone.addEventListener(name, () => zone.classList.remove("over"))
+    );
+    zone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const files = event.dataTransfer && event.dataTransfer.files;
+      if (files && files.length) {
+        input.files = files;
+        showName();
+      }
+    });
+    showName();
+  }
+
+  /* 换冲突策略时重新加载预览页。
+   * 策略会改变每一行的「将要做什么」，必须由服务端重算，不能只改个标签。 */
+  function setupReload(select) {
+    select.addEventListener("change", function () {
+      window.location.href = select.dataset.reloadUrl + encodeURIComponent(select.value);
+    });
+  }
+
+  function setupBulkSelect() {
+    const boxes = () => [...document.querySelectorAll('input[name="selected"]')];
+    const counter = document.querySelector("[data-selected-count]");
+
+    function refresh() {
+      if (counter) counter.textContent = String(boxes().filter((b) => b.checked).length);
+    }
+
+    const actions = {
+      "data-select-all": () => boxes().forEach((b) => (b.checked = true)),
+      "data-select-none": () => boxes().forEach((b) => (b.checked = false)),
+      "data-select-new": () =>
+        boxes().forEach((b) => (b.checked = b.dataset.new === "1")),
+    };
+    Object.entries(actions).forEach(([attribute, apply]) => {
+      document.querySelectorAll("[" + attribute + "]").forEach((button) => {
+        button.addEventListener("click", function () {
+          apply();
+          refresh();
+        });
+      });
+    });
+    boxes().forEach((box) => box.addEventListener("change", refresh));
+    refresh();
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-dropzone]").forEach(setupDropzone);
+    document.querySelectorAll("[data-reload-on-change]").forEach(setupReload);
+    if (document.querySelector('input[name="selected"]')) setupBulkSelect();
+  });
+})();

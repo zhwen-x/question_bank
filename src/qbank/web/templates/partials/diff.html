@@ -1,0 +1,13 @@
+{#- 字符级差异。左边（删除线）是库里已有的，右边（下划线）是要导入的。
+    不只靠颜色：删除带删除线、插入带下划线，色觉障碍用户同样能分辨。 -#}
+<span class="diff">
+{%- for segment in segments -%}
+  {%- if segment.change.value == "delete" -%}
+    <del title="库里已有的内容">{{ segment.text }}</del>
+  {%- elif segment.change.value == "insert" -%}
+    <ins title="要导入的内容">{{ segment.text }}</ins>
+  {%- else -%}
+    {{ segment.text }}
+  {%- endif -%}
+{%- endfor -%}
+</span>

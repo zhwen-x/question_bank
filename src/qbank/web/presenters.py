@@ -183,3 +183,61 @@ def build_view(question: Question, draft: QuestionDraft, options: RenderOptions)
         for index, sub in enumerate(draft.sub_questions, start=1)
     ]
     return view
+
+
+# ============================================================== 导入预览
+@dataclass(slots=True)
+class DuplicateView:
+    """一条查重结果在界面上的样子。"""
+
+    question_id: str
+    label: str
+    score: float
+    exact: bool
+    existing_excerpt: str
+    diff: list[Any]
+    change_count: int
+    tiny: bool
+
+    @property
+    def needs_attention(self) -> bool:
+        """差异只有几个字时要额外提醒。
+
+        这种情况最危险：肉眼几乎看不出来，却很可能正是「正确↔错误」这类把
+        题意反过来的改动——而相似度反而会很高，容易让人直接当成重复跳过。
+        """
+        return not self.exact and self.tiny
+
+
+@dataclass(slots=True)
+class PlannedView:
+    """导入预览里的一行。"""
+
+    index: int
+    draft: Any
+    excerpt_html: str
+    action: str
+    image_count: int
+    duplicates: list[DuplicateView]
+
+    @property
+    def exact_duplicate(self) -> DuplicateView | None:
+        return next((item for item in self.duplicates if item.exact), None)
+
+    @property
+    def similar(self) -> list[DuplicateView]:
+        return [item for item in self.duplicates if not item.exact]
+
+    @property
+    def needs_attention(self) -> bool:
+        return any(item.needs_attention for item in self.duplicates)
+
+    @property
+    def default_selected(self) -> bool:
+        """默认是否勾选。
+
+        完全重复的默认**不勾**——重复导入同一份文件是最常见的误操作，
+        默认不勾可以让「全部确认」这个动作保持安全。相似的仍然默认勾选，
+        因为相似很可能就是另一道题。
+        """
+        return self.exact_duplicate is None

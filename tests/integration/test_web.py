@@ -17,12 +17,14 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy.orm import Session
 
+from qbank.app import AppContext
 from qbank.core.enums import ConflictPolicy, QuestionType
 from qbank.core.repo.course import ChapterRepo, CourseRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
 from qbank.core.repo.tag import TagRepo
 from qbank.core.services.question import QuestionService
 from qbank.exchange.import_service import ImportService, plan_file
+from qbank.web import staging
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "docs" / "examples"
 
@@ -525,3 +527,303 @@ def test_reindex_from_health_page(client: TestClient, seeded: str, session: Sess
 
     client.post("/health/reindex")
     assert service.search.indexed_count() > 0
+
+
+# ============================================================== 导入向导
+SIMILAR_SOURCE = """【题型】多选  【章节】第2章 线性表  【难度】3  【分值】4
+【标签】线性表
+【题干】下列哪些属于非线性结构？
+【选项】
+A. 栈
+B. 二叉树
+C. 队列
+D. 图
+【答案】BD
+
+【题型】判断  【章节】第4章 栈与队列  【难度】1  【分值】1
+【题干】栈是一种后进先出的线性表。
+【答案】正确
+
+【题型】单选  【章节】第3章 控制结构/3.2 循环结构  【难度】2  【分值】2
+【标签】循环, 边界条件
+【来源】2025 期末   【编号】示例-01
+【题干】下列代码执行后 $n$ 的值是？
+
+```python
+n = 1
+for i in range(10):
+    n *= 2
+```
+
+【选项】
+A. 1024
+*B. 1023
+C. $2^{11}$
+D. 无法确定
+【答案】B
+【解析】循环体执行 10 次，$n = 2^{10} = 1024$。注意本题答案刻意设为 B 以演示
+「答案与标记一致」的校验。
+"""
+
+BROKEN_SOURCE = """【题型】单选
+【题干】好的那道题
+【选项】
+A. 一
+*B. 二
+【答案】B
+
+【题型】绘图题
+【题干】有问题的那道题
+"""
+
+
+def upload(client: TestClient, course_id: str, name: str, content: str) -> str:
+    """上传并返回 token。"""
+    response = client.post(
+        "/import",
+        data={"course_id": course_id},
+        files={"file": (name, content.encode("utf-8"), "text/markdown")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    location = response.headers["location"]
+    assert "/import/" in location, location
+    return location.split("/import/")[1].split("?")[0]
+
+
+def test_import_page_lists_supported_formats(client: TestClient, course_id: str) -> None:
+    body = text_of(client.get(f"/import?course_id={course_id}").text)
+    assert ".docx" in body and ".md" in body
+    assert "pandoc" in body
+
+
+def test_import_page_without_course_redirects(client: TestClient) -> None:
+    response = client.get("/import", follow_redirects=True)
+    assert "先创建一门课程" in text_of(response.text)
+
+
+def test_upload_then_preview(client: TestClient, course_id: str) -> None:
+    token = upload(client, course_id, "题库.md", SIMILAR_SOURCE)
+    response = client.get(f"/import/{token}?course_id={course_id}")
+    assert response.status_code == 200
+    body = text_of(response.text)
+    assert "解析出 3 道题" in body
+    assert "不写入任何内容" in body
+
+
+def test_preview_writes_nothing(client: TestClient, course_id: str, session: Session) -> None:
+    """预览必须真的什么都不写——这是用户敢点「上传」的前提。"""
+    token = upload(client, course_id, "题库.md", SIMILAR_SOURCE)
+    client.get(f"/import/{token}?course_id={course_id}")
+    session.expire_all()
+    assert QuestionRepo(session).count(QuestionFilter(course_id=course_id)) == 0
+
+
+def test_preview_can_be_refreshed(client: TestClient, course_id: str) -> None:
+    """暂存的是文件而不是内存里的计划，所以预览页可以反复刷新。"""
+    token = upload(client, course_id, "题库.md", SIMILAR_SOURCE)
+    for _ in range(3):
+        assert client.get(f"/import/{token}?course_id={course_id}").status_code == 200
+
+
+def test_preview_shows_parse_errors_with_line_numbers(client: TestClient, course_id: str) -> None:
+    token = upload(client, course_id, "坏文件.md", BROKEN_SOURCE)
+    body = text_of(client.get(f"/import/{token}?course_id={course_id}").text)
+    assert "解析失败" in body
+    assert "第 8 行" in body
+    assert "无法识别的题型" in body
+    assert "有问题的那道题" in body
+    assert "好的那道题" in body, "一道题坏了不该影响同文件里的其他题"
+
+
+def test_preview_highlights_reversed_meaning(client: TestClient, seeded: str) -> None:
+    """最危险的一类：一字之差反转题意，相似度却很高。
+
+    必须把差异逐字高亮出来，否则用户面对两段几乎一样的中文根本看不出区别。
+    """
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    html = client.get(f"/import/{token}?course_id={seeded}").text
+    assert "<ins" in html and "<del" in html
+    assert "只差几个字" in text_of(html)
+    # 「属于线性结构」→「属于非线性结构」：插入了一个「非」
+    assert re.search(r"<ins[^>]*>非</ins>", html)
+    # 「先进先出」→「后进先出」
+    assert re.search(r"<del[^>]*>先</del>", html)
+    assert re.search(r"<ins[^>]*>后</ins>", html)
+
+
+def test_preview_marks_exact_duplicate(client: TestClient, seeded: str) -> None:
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    body = text_of(client.get(f"/import/{token}?course_id={seeded}").text)
+    assert "完全相同" in body
+    assert "跳过（已存在）" in body
+
+
+def test_exact_duplicates_are_unchecked_by_default(client: TestClient, seeded: str) -> None:
+    """重复导入同一份文件是最常见的误操作，默认不勾让「确认」保持安全。"""
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    html = client.get(f"/import/{token}?course_id={seeded}").text
+    rows = re.findall(r'<input type="checkbox" name="selected" value="(\d+)"(.*?)>', html, re.S)
+    checked = {index for index, attrs in rows if "checked" in attrs}
+    unchecked = {index for index, attrs in rows if "checked" not in attrs}
+    assert unchecked == {"3"}, "完全重复的第 3 题应默认不勾"
+    assert checked == {"1", "2"}
+
+
+def test_policy_change_updates_actions(client: TestClient, seeded: str) -> None:
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    skip = text_of(client.get(f"/import/{token}?course_id={seeded}&policy=skip").text)
+    overwrite = text_of(client.get(f"/import/{token}?course_id={seeded}&policy=overwrite").text)
+    assert "跳过（已存在）" in skip
+    assert "覆盖已有" in overwrite
+
+
+def test_commit_only_selected(client: TestClient, seeded: str, session: Session) -> None:
+    """老师常常只想导入一份文件里的某几道题。"""
+    before = QuestionRepo(session).count(QuestionFilter(course_id=seeded))
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    response = client.post(
+        f"/import/{token}/commit",
+        data={"course_id": seeded, "policy": "skip", "selected": ["1"]},
+        follow_redirects=True,
+    )
+    assert "新建 1" in text_of(response.text)
+    session.expire_all()
+    assert QuestionRepo(session).count(QuestionFilter(course_id=seeded)) == before + 1
+
+
+def test_commit_without_selection_is_rejected(
+    client: TestClient, seeded: str, session: Session
+) -> None:
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    response = client.post(
+        f"/import/{token}/commit",
+        data={"course_id": seeded, "policy": "skip"},
+        follow_redirects=True,
+    )
+    assert "一道题都没勾选" in text_of(response.text)
+
+
+def test_commit_discards_the_staged_file(
+    client: TestClient, seeded: str, web_context: AppContext
+) -> None:
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    client.post(
+        f"/import/{token}/commit",
+        data={"course_id": seeded, "policy": "skip", "selected": ["1"]},
+    )
+    assert not list(staging.staging_dir(web_context.paths).iterdir())
+
+
+def test_discard_removes_the_upload(
+    client: TestClient, seeded: str, web_context: AppContext
+) -> None:
+    token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)
+    client.post(f"/import/{token}/discard", data={"course_id": seeded})
+    assert not list(staging.staging_dir(web_context.paths).iterdir())
+
+
+def test_expired_token_gives_actionable_message(client: TestClient, course_id: str) -> None:
+    response = client.get(f"/import/{'0' * 32}?course_id={course_id}", follow_redirects=True)
+    assert "重新上传" in text_of(response.text)
+
+
+@pytest.mark.parametrize("token", ["zzzz", "not-hex-at-all", "0" * 31, "." * 32])
+def test_malicious_token_is_rejected(client: TestClient, course_id: str, token: str) -> None:
+    """token 直接参与拼路径，必须挡住目录穿越。
+
+    带 ``/`` 的尝试（``../../etc``）根本匹配不到路由，Starlette 直接 404——
+    那也是安全的。这里测的是**能进到处理函数**的那些非法 token。
+    """
+    response = client.get(f"/import/{token}?course_id={course_id}", follow_redirects=True)
+    assert response.status_code == 200
+    assert "无效的上传标识" in text_of(response.text)
+
+
+def test_path_traversal_token_does_not_reach_the_filesystem(
+    client: TestClient, course_id: str
+) -> None:
+    response = client.get(f"/import/..%2F..%2Fetc?course_id={course_id}", follow_redirects=True)
+    # 匹配不到路由即可；重点是绝不能返回文件内容
+    assert response.status_code == 404
+
+
+def test_unsupported_format_is_rejected(client: TestClient, course_id: str) -> None:
+    response = client.post(
+        "/import",
+        data={"course_id": course_id},
+        files={"file": ("题库.pdf", b"not supported", "application/pdf")},
+        follow_redirects=True,
+    )
+    assert "不支持的文件类型" in text_of(response.text)
+
+
+def test_file_without_suffix_is_rejected(client: TestClient, course_id: str) -> None:
+    response = client.post(
+        "/import",
+        data={"course_id": course_id},
+        files={"file": ("没有后缀", b"content", "text/plain")},
+        follow_redirects=True,
+    )
+    assert "扩展名" in text_of(response.text)
+
+
+def test_batch_history_and_rollback(client: TestClient, course_id: str, session: Session) -> None:
+    token = upload(client, course_id, "题库.md", SIMILAR_SOURCE)
+    client.post(
+        f"/import/{token}/commit",
+        data={"course_id": course_id, "policy": "skip", "selected": ["1", "2", "3"]},
+    )
+    session.expire_all()
+    assert QuestionRepo(session).count(QuestionFilter(course_id=course_id)) == 3
+
+    page = client.get(f"/import?course_id={course_id}").text
+    assert "题库.md" in text_of(page)
+    batch_id = re.search(r"/import/batches/([0-9a-f-]{36})/rollback", page)
+    assert batch_id is not None
+
+    # 确认词不对时不执行
+    client.post(
+        f"/import/batches/{batch_id.group(1)}/rollback",
+        data={"course_id": course_id, "confirm": "好"},
+    )
+    session.expire_all()
+    assert QuestionRepo(session).count(QuestionFilter(course_id=course_id)) == 3
+
+    client.post(
+        f"/import/batches/{batch_id.group(1)}/rollback",
+        data={"course_id": course_id, "confirm": "撤销"},
+    )
+    session.expire_all()
+    assert QuestionRepo(session).count(QuestionFilter(course_id=course_id)) == 0
+
+
+@pytest.mark.pandoc
+def test_import_word_through_the_wizard(
+    client: TestClient, course_id: str, session: Session, tmp_path: Path
+) -> None:
+    """Word 全链路走一遍界面：OMML 公式要变成 LaTeX，内嵌图片要收进题库。"""
+    from qbank.exchange import pandoc
+
+    if not pandoc.is_available():
+        pytest.skip("pandoc 不可用")
+
+    source = tmp_path / "题库.docx"
+    pandoc.markdown_to_docx(SIMILAR_SOURCE, source)
+
+    response = client.post(
+        "/import",
+        data={"course_id": course_id},
+        files={
+            "file": (
+                "题库.docx",
+                source.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+        follow_redirects=False,
+    )
+    token = response.headers["location"].split("/import/")[1].split("?")[0]
+    preview = client.get(f"/import/{token}?course_id={course_id}")
+    assert preview.status_code == 200
+    assert "解析出 3 道题" in text_of(preview.text)

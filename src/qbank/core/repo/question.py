@@ -166,21 +166,34 @@ class QuestionRepo(Repo):
         return int(self.session.scalar(self._apply(select(func.count(Question.id)), criteria)) or 0)
 
     def dedup_candidates(
-        self, course_id: str, question_type: QuestionType, *, restrict_ids: Sequence[str] = ()
+        self,
+        course_id: str,
+        question_types: QuestionType | Sequence[QuestionType],
+        *,
+        restrict_ids: Sequence[str] = (),
     ) -> Sequence[Question]:
         """查重的候选池：同课程 + 同题型（可再用检索结果收窄）。
 
         不做全表扫描——相似度是在这个收窄后的集合上精确计算的
         （见 :mod:`qbank.core.services.dedup`）。
+
+        ``selectinload`` 不是可有可无的优化：候选动辄上千条，逐条惰性加载
+        ``answer`` 与 ``sub_questions`` 会退化成几千条 SQL，实测光这一项就占掉
+        一半耗时。
         """
+        wanted = (
+            [question_types] if isinstance(question_types, QuestionType) else list(question_types)
+        )
         statement = select(Question).where(
             Question.course_id == course_id,
-            Question.type == question_type,
+            Question.type.in_(wanted),
             Question.deleted_at.is_(None),
         )
         if restrict_ids:
             statement = statement.where(Question.id.in_(list(restrict_ids)))
-        return self.session.scalars(statement.options(selectinload(Question.answer))).all()
+        return self.session.scalars(
+            statement.options(selectinload(Question.answer), selectinload(Question.sub_questions))
+        ).all()
 
     def _apply(self, statement: Select, criteria: QuestionFilter) -> Select:  # type: ignore[type-arg]
         if not criteria.include_deleted:

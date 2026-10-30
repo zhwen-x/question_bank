@@ -187,9 +187,19 @@ def rank_similar(
     [('q1', True), ('q2', False)]
     """
     hints: list[DuplicateHint] = []
+    target_size = len(target_shingles)
     for candidate in candidates:
         if target_fingerprint and candidate.fingerprint == target_fingerprint:
             hints.append(DuplicateHint(candidate.question_id, exact=True, score=1.0))
+            continue
+        # 长度界：Jaccard ≤ min(|A|,|B|) / max(|A|,|B|)。
+        # 这是个**可证明**的上界（交集不可能大于较小的那个集合，并集不可能小于
+        # 较大的那个），所以按它剪枝绝不会漏掉真正达标的候选，而代价只是两次
+        # 整数比较。题目长短差异大时能跳过绝大多数候选。
+        candidate_size = len(candidate.shingle_set)
+        if not target_size or not candidate_size:
+            continue
+        if min(target_size, candidate_size) < threshold * max(target_size, candidate_size):
             continue
         score = similarity(target_shingles, candidate.shingle_set)
         if score >= threshold:

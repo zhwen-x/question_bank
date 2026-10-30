@@ -146,3 +146,67 @@ def test_rank_similar_respects_limit_and_order() -> None:
 def test_rank_similar_empty_target_yields_nothing() -> None:
     """新题没有可比内容时不该报出一堆噪声候选。"""
     assert rank_similar("", frozenset(), [Candidate("q1", "fp", shingles(["任意"]))]) == []
+
+
+# -------------------------------------------------------- 剪枝的正确性
+def test_length_bound_pruning_never_changes_results() -> None:
+    """长度界剪枝必须是**无损**的。
+
+    ``rank_similar`` 用 ``Jaccard ≤ min(|A|,|B|)/max(|A|,|B|)`` 跳过不可能达标的
+    候选。这是个可证明的上界，但写错一个不等号就会静默漏掉真正的重复——而
+    漏掉重复正是这整套机制要防的事。所以用随机数据与朴素实现逐一对照。
+    """
+    import random
+
+    random.seed(20261031)
+    alphabet = "数据结构算法栈队列图树排序查找复杂度递归循环分支函数指针链表哈希"
+
+    def text(length: int) -> str:
+        return "".join(random.choice(alphabet) for _ in range(length))
+
+    candidates = [
+        Candidate(f"q{i}", f"fp{i}", shingles([text(random.randint(5, 80))])) for i in range(300)
+    ]
+
+    def without_pruning(
+        target_fingerprint: str, target: frozenset[str]
+    ) -> list[tuple[str, bool, float]]:
+        found: list[tuple[str, bool, float]] = []
+        for candidate in candidates:
+            if target_fingerprint and candidate.fingerprint == target_fingerprint:
+                found.append((candidate.question_id, True, 1.0))
+                continue
+            score = similarity(target, candidate.shingle_set)
+            if score >= SIMILARITY_THRESHOLD:
+                found.append((candidate.question_id, False, score))
+        found.sort(key=lambda item: (not item[1], -item[2], item[0]))
+        return found[:10]
+
+    for trial in range(200):
+        target = shingles([text(random.randint(5, 80))])
+        fingerprint_value = "fp7" if trial % 40 == 0 else "no-match"
+        actual = [
+            (hint.question_id, hint.exact, round(hint.score, 9))
+            for hint in rank_similar(fingerprint_value, target, candidates)
+        ]
+        expected = [
+            (qid, exact, round(score, 9))
+            for qid, exact, score in without_pruning(fingerprint_value, target)
+        ]
+        assert actual == expected, f"第 {trial} 轮剪枝改变了结果"
+
+
+def test_length_bound_does_not_prune_exact_fingerprint() -> None:
+    """长度悬殊但指纹相同时，必须仍然认出是同一道题。
+
+    指纹相同意味着规范化文本完全一致，长度也必然一致——但剪枝逻辑放在指纹
+    判定**之后**才是安全的，这个测试锁住这个顺序。
+    """
+    target_fingerprint = fingerprint(["很短"])
+    hints = rank_similar(
+        target_fingerprint,
+        shingles(["很短"]),
+        [Candidate("q1", target_fingerprint, shingles(["完全不同而且长得多的一段题干内容"]))],
+    )
+    assert [h.question_id for h in hints] == ["q1"]
+    assert hints[0].exact

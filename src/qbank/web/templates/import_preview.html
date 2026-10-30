@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>导入预览</h1>
+  <span class="sub">{{ source_name }}（{{ source_format }}）→ {{ course.name }}</span>
+</div>
+
+<div class="flash {% if plan.errors %}warn{% else %}ok{% endif %}">
+  {{ summary }}
+  <div style="font-size:12px; margin-top:2px">此页不写入任何内容，可以随意刷新、换策略重看。</div>
+</div>
+
+{% if attention %}
+<div class="flash warn">
+  有 <strong>{{ attention }}</strong> 道题与库里已有题目<strong>只差几个字</strong>。
+  这种情况最危险：一字之差就可能把题意反过来（「正确的是」↔「错误的是」、
+  「导数」↔「积分」），相似度反而很高，容易被当成重复跳过。
+  请逐条看下面的差异高亮后再决定。
+</div>
+{% endif %}
+
+{% if plan.errors %}
+<div class="card">
+  <h3 style="margin:0 0 8px; font-size:14px; color: var(--danger)">
+    {{ plan.errors | length }} 道题解析失败，不会被导入
+  </h3>
+  {% for error in plan.errors %}
+    <div class="parse-error">
+      <span class="where">第 {{ error.line_number }} 行</span>：{{ error.message }}
+      {% if error.excerpt %}<div class="excerpt">{{ error.excerpt }}</div>{% endif %}
+    </div>
+  {% endfor %}
+  <p class="hint" style="color: var(--text-dim); font-size:12px; margin-bottom:0">
+    其余题目不受影响。按行号到源文件里改好后重新上传即可。
+  </p>
+</div>
+{% endif %}
+
+{% if not views %}
+  <div class="empty">
+    <h2>没有解析出任何题目</h2>
+    <p>检查一下文件是不是按模板格式写的——每道题要以 <code>【题型】</code> 开头。</p>
+    <p>
+      <a class="btn" href="/import?course_id={{ course.id }}">重新上传</a>
+    </p>
+  </div>
+{% else %}
+
+<form method="post" action="/import/{{ token }}/commit">
+<input type="hidden" name="course_id" value="{{ course.id }}">
+
+<div class="card">
+  <div class="toolbar" style="margin-bottom:0">
+    <label for="policy" style="font-weight:550">遇到库里已有的同一道题</label>
+    <select id="policy" name="policy" data-reload-on-change
+            data-reload-url="/import/{{ token }}?course_id={{ course.id }}&policy=">
+      {% for item in policies %}
+        <option value="{{ item.value }}" {% if item == policy %}selected{% endif %}>
+          {{ item.label }}
+        </option>
+      {% endfor %}
+    </select>
+    <span class="hint" style="color: var(--text-dim); font-size:12px">
+      「覆盖」会在改动前自动存一份历史快照，可回滚
+    </span>
+    <span style="flex:1"></span>
+    <button type="button" class="btn btn-sm" data-select-all>全选</button>
+    <button type="button" class="btn btn-sm" data-select-none>全不选</button>
+    <button type="button" class="btn btn-sm" data-select-new>只选新题</button>
+  </div>
+</div>
+
+{% for view in views %}
+  <div class="import-row {% if view.needs_attention %}attention{% endif %}
+              {% if view.exact_duplicate %}duplicate{% endif %}">
+    <span class="pick">
+      <input type="checkbox" name="selected" value="{{ view.index }}"
+             data-new="{{ '1' if not view.exact_duplicate else '0' }}"
+             {% if view.default_selected %}checked{% endif %}
+             aria-label="导入第 {{ view.index }} 题">
+    </span>
+    <div class="body">
+      <div class="head">
+        <span class="n">{{ view.index }}.</span>
+        <span class="badge type">{{ view.draft.type.label }}</span>
+        <span class="badge diff-{{ view.draft.difficulty.value }}">
+          难度 {{ view.draft.difficulty.value }}
+        </span>
+        {% if view.draft.score %}
+          <span class="badge score">{{ view.draft.score | round(1) }} 分</span>
+        {% endif %}
+        {% if view.draft.chapter %}<span class="badge">{{ view.draft.chapter }}</span>{% endif %}
+        {% for tag in view.draft.tags %}<span class="badge tag">#{{ tag }}</span>{% endfor %}
+        {% if view.image_count %}<span class="badge">{{ view.image_count }} 张图</span>{% endif %}
+        {% if view.draft.sub_questions %}
+          <span class="badge">{{ view.draft.sub_questions | length }} 小问</span>
+        {% endif %}
+        <span style="flex:1"></span>
+        <span class="badge {% if view.exact_duplicate %}draft{% else %}active{% endif %}">
+          {{ view.action }}
+        </span>
+      </div>
+
+      <div class="rendered">{{ view.excerpt_html | safe }}</div>
+
+      {% for dup in view.duplicates %}
+        <div class="dup {% if dup.exact %}exact{% elif dup.tiny %}tiny{% endif %}">
+          <div class="dup-head">
+            <strong style="color: {% if dup.exact %}var(--danger){% elif dup.tiny %}var(--warn){% else %}var(--text-dim){% endif %}">
+              {{ dup.label }}
+            </strong>
+            <span>相似度 {{ (dup.score * 100) | round | int }}%</span>
+            {% if not dup.exact %}
+              <span>{{ dup.change_count }} 处差异</span>
+              {% if dup.tiny %}
+                <span class="badge draft">只差几个字，请仔细核对</span>
+              {% endif %}
+            {% endif %}
+            <a href="/questions/{{ dup.question_id }}" target="_blank" rel="noopener">
+              查看库里那道题 ↗
+            </a>
+          </div>
+          {% if dup.exact %}
+            <div style="color: var(--text-dim)">题面完全相同。</div>
+          {% else %}
+            {% with segments = dup.diff %}
+              {% include "partials/diff.html" %}
+            {% endwith %}
+            <div style="color: var(--text-faint); font-size:11px; margin-top:4px">
+              <del>删除线</del>＝库里已有的　<ins>下划线</ins>＝要导入的
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endfor %}
+
+<div class="sticky-actions">
+  <button type="submit" class="btn-primary">导入选中的题目</button>
+  <span class="hint" style="color: var(--text-dim); font-size:13px">
+    已勾选 <strong data-selected-count>{{ views | selectattr("default_selected") | list | length }}</strong>
+    / {{ views | length }} 道
+  </span>
+  <span style="flex:1"></span>
+  <a class="btn btn-quiet" href="/import?course_id={{ course.id }}">重新上传</a>
+</div>
+</form>
+
+<form method="post" action="/import/{{ token }}/discard" style="margin-top:10px">
+  <input type="hidden" name="course_id" value="{{ course.id }}">
+  <button type="submit" class="btn btn-sm btn-quiet">丢弃这次上传</button>
+</form>
+
+{% endif %}
+
+{% endblock %}

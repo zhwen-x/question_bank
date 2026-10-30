@@ -494,3 +494,105 @@ legend { font-size: 12px; font-weight: 600; color: var(--text-dim); padding: 0 6
   body { background: #fff; color: #000; }
   .content { padding: 0; }
 }
+
+/* ------------------------------------------------------------ 导入预览 */
+.import-row {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.import-row.attention { border-color: var(--warn); background: var(--warn-bg); }
+.import-row.duplicate { opacity: 0.78; }
+.import-row > .pick { padding-top: 2px; }
+.import-row > .body { flex: 1; min-width: 0; }
+.import-row .head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.import-row .n { font-variant-numeric: tabular-nums; color: var(--text-faint); }
+
+/* 查重对照 */
+.dup {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-sunken);
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+}
+.dup.exact { border-left-color: var(--danger); }
+.dup.tiny { border-left-color: var(--warn); }
+.dup .dup-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* 字符级差异高亮。
+ *
+ * 不只靠颜色区分：删除加删除线、插入加下划线。色觉障碍用户靠颜色分不出
+ * 「库里是什么」和「要导入的是什么」，而这正是这一页唯一的判断依据。 */
+.diff { line-height: 1.9; word-break: break-word; }
+.diff del {
+  background: var(--danger-bg);
+  color: var(--danger);
+  text-decoration: line-through;
+  padding: 1px 2px;
+  border-radius: 3px;
+}
+.diff ins {
+  background: var(--ok-bg);
+  color: var(--ok);
+  text-decoration: underline;
+  padding: 1px 2px;
+  border-radius: 3px;
+}
+
+.parse-error {
+  padding: 8px 12px;
+  border-left: 3px solid var(--danger);
+  background: var(--danger-bg);
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.parse-error .where { color: var(--danger); font-weight: 600; }
+.parse-error .excerpt { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+
+.sticky-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dropzone {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 28px 20px;
+  text-align: center;
+  background: var(--bg-raised);
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone.over { border-color: var(--accent); background: var(--accent-bg); }
+.dropzone .file-name { font-weight: 550; color: var(--text); }

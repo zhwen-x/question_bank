@@ -33,7 +33,15 @@ def create_app(context: AppContext | None = None) -> FastAPI:
     application.state.bank = context or open_bank()
     application.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-    from qbank.web.routers import assets, chapters, courses, health, questions, tags
+    from qbank.web.routers import (
+        assets,
+        chapters,
+        courses,
+        health,
+        imports,
+        questions,
+        tags,
+    )
 
     for router in (
         courses.router,
@@ -42,6 +50,7 @@ def create_app(context: AppContext | None = None) -> FastAPI:
         tags.router,
         assets.router,
         health.router,
+        imports.router,
     ):
         application.include_router(router)
 

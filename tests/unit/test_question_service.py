@@ -204,6 +204,44 @@ def test_check_duplicates_flags_exact_match(service: QuestionService, course_id:
     assert [(h.question_id, h.exact, h.label) for h in hints] == [(created.id, True, "完全相同")]
 
 
+def test_similarity_excludes_the_answer(service: QuestionService, course_id: str) -> None:
+    """相似度**不能**把答案算进去——那会把最危险的一类压到阈值以下。
+
+    实测：「栈是一种**先**进先出的线性表／答案：错误」与「栈是一种**后**进先出
+    的线性表／答案：正确」，题意被一字反转，答案也跟着反转。只比题干相似度
+    0.538，把答案算进去就掉到 0.412，低于 0.45 的阈值——这道最需要人工复核的题
+    反而被静默漏掉。
+
+    答案仍然要进**指纹**：同题干不同答案是两道题，不能自动跳过。
+    """
+    original = QuestionDraft.model_validate(
+        {
+            "type": QuestionType.TRUE_FALSE,
+            "stem": "栈是一种先进先出的线性表。",
+            "payload": {"type": "true_false", "correct": False},
+            "answer": "错误",
+        }
+    )
+    reversed_meaning = QuestionDraft.model_validate(
+        {
+            "type": QuestionType.TRUE_FALSE,
+            "stem": "栈是一种后进先出的线性表。",
+            "payload": {"type": "true_false", "correct": True},
+            "answer": "正确",
+        }
+    )
+    service.create(course_id, original)
+
+    hints = service.check_duplicates(course_id, reversed_meaning)
+    assert hints, "题意被反转的题必须被列为相似候选，交给人确认"
+    assert not hints[0].exact, "它不是同一道题，不能按完全相同处理"
+
+    # 答案仍然参与指纹：两者指纹必须不同
+    assert service.fingerprint_parts(original) != service.fingerprint_parts(reversed_meaning)
+    assert "错误" in service.fingerprint_parts(original)
+    assert "错误" not in service.similarity_parts(original)
+
+
 def test_check_duplicates_only_compares_same_type(service: QuestionService, course_id: str) -> None:
     """候选池按「同课程 + 同题型」收窄，判断题不会跟选择题比。"""
     service.create(course_id, make_choice_draft())

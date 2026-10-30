@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content_class %}narrow{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>批量导入</h1>
+  <span class="sub">导入到「{{ course.name }}」</span>
+</div>
+
+<form class="card" method="post" action="/import" enctype="multipart/form-data">
+  <div class="field">
+    <label for="course_id">导入到哪门课</label>
+    <select id="course_id" name="course_id">
+      {% for item in courses %}
+        <option value="{{ item.id }}" {% if item.id == course.id %}selected{% endif %}>
+          {{ item.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="dropzone" data-dropzone>
+    <p style="margin:0 0 10px">把文件拖到这里，或</p>
+    <input type="file" name="file" required data-file-input
+           accept=".md,.markdown,.txt,.docx,.html,.htm,.xhtml,.odt,.rtf,.tex">
+    <p class="file-name" data-file-name style="margin:10px 0 0; color: var(--text-faint)">
+      还没有选择文件
+    </p>
+  </div>
+
+  <div class="toolbar" style="margin:14px 0 0">
+    <button type="submit" class="btn-primary">上传并预览</button>
+    <span class="hint" style="color: var(--text-dim); font-size:12px">
+      上传后先看预览，确认无误才会写入
+    </span>
+  </div>
+</form>
+
+<div class="card">
+  <h3 style="margin:0 0 8px; font-size:14px">支持的格式</h3>
+  <dl class="kv">
+    <dt>无需额外依赖</dt><dd>{{ native_suffixes | join("、") }}</dd>
+    <dt>需要 pandoc</dt>
+    <dd>
+      {{ pandoc_suffixes | join("、") }}
+      {% if pandoc.available %}
+        <span class="badge active">已就绪 {{ pandoc.version }}</span>
+      {% else %}
+        <span class="badge draft">当前不可用</span>
+        <div style="color: var(--text-dim); font-size:12px; margin-top:2px">
+          {{ pandoc.detail }}；安装：<code>pip install "pypandoc_binary"</code>
+        </div>
+      {% endif %}
+    </dd>
+  </dl>
+  <p style="margin:10px 0 0; font-size:13px">
+    文件要按模板格式写。模板说明与可直接改的示例见
+    <code>docs/导入模板规范.md</code> 与 <code>docs/examples/</code>。
+  </p>
+  <ul style="font-size:13px; color: var(--text-dim); margin:8px 0 0">
+    <li>Word 里的<strong>公式直接用公式编辑器</strong>，导入时自动转成 LaTeX</li>
+    <li>图片直接贴在 Word 里，会自动收进题库；合并单元格的表格会完整保留</li>
+    <li>一道题格式不对不影响同一份文件里的其他题目，错误会报出源文件行号</li>
+  </ul>
+</div>
+
+{% if batches %}
+<div class="card">
+  <h3 style="margin:0 0 8px; font-size:14px">最近的导入</h3>
+  <table class="rendered" style="width:100%">
+    <thead>
+      <tr><th>时间</th><th>文件</th><th>结果</th><th style="width:220px">撤销</th></tr>
+    </thead>
+    <tbody>
+    {% for batch in batches %}
+      <tr>
+        <td style="white-space:nowrap">{{ batch.started_at.strftime("%m-%d %H:%M") }}</td>
+        <td>{{ batch.source_name }}</td>
+        <td>
+          新建 {{ batch.created_count }}，更新 {{ batch.updated_count }}，跳过 {{ batch.skipped_count }}
+          {% if batch.failed_count %}
+            <span class="badge" style="background: var(--danger-bg); color: var(--danger)">
+              失败 {{ batch.failed_count }}
+            </span>
+          {% endif %}
+        </td>
+        <td>
+          {% if batch.created_ids %}
+            <form method="post" action="/import/batches/{{ batch.id }}/rollback"
+                  style="display:flex; gap:6px; align-items:center">
+              <input type="hidden" name="course_id" value="{{ course.id }}">
+              <input name="confirm" type="text" placeholder="撤销" style="width:70px" required>
+              <button type="submit" class="btn btn-sm btn-danger">
+                删除本批 {{ batch.created_ids | length }} 道
+              </button>
+            </form>
+          {% else %}
+            <span style="color: var(--text-faint); font-size:12px">无新建题目可撤销</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint" style="color: var(--text-dim); font-size:12px; margin-bottom:0">
+    撤销只会删掉该批<strong>新建</strong>的题目。被覆盖的题各有修改历史，
+    请到题目详情页单独回滚——混在一起做会让撤销的后果变得不可预测。
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
