@@ -406,3 +406,38 @@ def test_reindex_all_rebuilds_from_scratch(service: QuestionService, course_id: 
     assert service.reindex_all() == 4
     assert service.search.matching_ids("循环")
     assert service.search.matching_ids("最短路径")
+
+
+def test_preview_action_matches_what_upsert_will_do(
+    service: QuestionService, course_id: str
+) -> None:
+    """``check_duplicates`` 的判定必须和 ``upsert`` 完全一致。
+
+    不一致的后果很具体：从 docx 导入建的库、再用 md 重新导入时，pandoc 往返
+    会让题面出现细微差异 → 指纹不同 → 预览说「将要新建」；但 upsert 认的是
+    ``external_id``，实际会走更新。预览存在的全部意义就是让用户事先知道会
+    发生什么，说一套做一套比没有预览更糟。
+    """
+    original = make_choice_draft(external_id="shared-01")
+    service.create(course_id, original)
+
+    # 题面被改过，但编号不变——upsert 会认出是同一道题
+    edited = make_choice_draft(
+        external_id="shared-01", stem="题干被整个改写了，和原来几乎没有共同之处。"
+    )
+    hints = service.check_duplicates(course_id, edited)
+    assert hints, "编号相同却没被判为同一道题"
+    assert hints[0].exact
+    assert hints[0].label == "编号相同"
+
+    result = service.upsert(course_id, edited, policy=ConflictPolicy.SKIP)
+    assert result.skipped, "预览说已存在，upsert 却当成了新题"
+
+
+def test_external_id_match_is_not_listed_twice(service: QuestionService, course_id: str) -> None:
+    """编号与指纹同时命中同一道题时，只报一条。"""
+    draft = make_choice_draft(external_id="dup-01")
+    service.create(course_id, draft)
+    hints = service.check_duplicates(course_id, draft)
+    assert len({hint.question_id for hint in hints}) == len(hints)
+    assert len(hints) == 1

@@ -194,6 +194,7 @@ class DuplicateView:
     label: str
     score: float
     exact: bool
+    matched_by: str
     existing_excerpt: str
     diff: list[Any]
     change_count: int

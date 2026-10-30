@@ -121,7 +121,16 @@
               查看库里那道题 ↗
             </a>
           </div>
-          {% if dup.exact %}
+          {% if dup.matched_by == "external_id" %}
+            <div style="color: var(--text-dim)">
+              编号相同，视为同一道题（即使题面被改过）。下面是题面差异：
+            </div>
+            {% if dup.change_count %}
+              {% with segments = dup.diff %}{% include "partials/diff.html" %}{% endwith %}
+            {% else %}
+              <div style="color: var(--text-faint)">题面也完全一致。</div>
+            {% endif %}
+          {% elif dup.exact %}
             <div style="color: var(--text-dim)">题面完全相同。</div>
           {% else %}
             {% with segments = dup.diff %}

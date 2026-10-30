@@ -46,6 +46,7 @@ import hashlib
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from enum import Enum
 
 from qbank.core.content.segment import normalize
 from qbank.core.content.text import FOR_FINGERPRINT, to_plain_text
@@ -131,6 +132,18 @@ def similarity(left: frozenset[str], right: frozenset[str]) -> float:
     return len(left & right) / len(left | right)
 
 
+class MatchBy(str, Enum):
+    """凭什么判定为同一道题。"""
+
+    #: 来源文件里的编号（external_id）相同。最可靠——题面被改过也认得出，
+    #: 这正是「同一个文件改几处后重新导入」需要的行为
+    EXTERNAL_ID = "external_id"
+    #: 规范化题面的指纹相同
+    FINGERPRINT = "fingerprint"
+    #: 只是相似，**不是**同一道题的判定
+    SIMILARITY = "similarity"
+
+
 @dataclass(frozen=True, slots=True)
 class DuplicateHint:
     """一条查重结果。
@@ -141,9 +154,12 @@ class DuplicateHint:
     question_id: str
     exact: bool
     score: float
+    matched_by: MatchBy = MatchBy.SIMILARITY
 
     @property
     def label(self) -> str:
+        if self.matched_by is MatchBy.EXTERNAL_ID:
+            return "编号相同"
         if self.exact:
             return "完全相同"
         if self.score >= 0.85:
@@ -183,14 +199,21 @@ def rank_similar(
     ...     Candidate("q2", "fp-y", b),
     ...     Candidate("q3", "fp-z", c),
     ... ])
-    >>> [(h.question_id, h.exact) for h in hints]
-    [('q1', True), ('q2', False)]
+    >>> [(h.question_id, h.exact, h.label) for h in hints]
+    [('q1', True, '完全相同'), ('q2', False, '可能相似')]
     """
     hints: list[DuplicateHint] = []
     target_size = len(target_shingles)
     for candidate in candidates:
         if target_fingerprint and candidate.fingerprint == target_fingerprint:
-            hints.append(DuplicateHint(candidate.question_id, exact=True, score=1.0))
+            hints.append(
+                DuplicateHint(
+                    candidate.question_id,
+                    exact=True,
+                    score=1.0,
+                    matched_by=MatchBy.FINGERPRINT,
+                )
+            )
             continue
         # 长度界：Jaccard ≤ min(|A|,|B|) / max(|A|,|B|)。
         # 这是个**可证明**的上界（交集不可能大于较小的那个集合，并集不可能小于

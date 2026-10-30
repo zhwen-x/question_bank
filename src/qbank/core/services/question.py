@@ -151,14 +151,44 @@ class QuestionService:
     ) -> list[dedup.DuplicateHint]:
         """查重。精确命中可自动处理，相似命中**只作建议**（原因见 dedup 模块）。
 
+        判定「同一道题」的规则必须和 :meth:`upsert` **完全一致**，否则预览页说
+        「将要新建」而提交时却更新了——预览存在的全部意义就是让用户事先知道会
+        发生什么。所以这里和 upsert 一样，先看 ``external_id`` 再看指纹。
+
         ``index`` 为 ``None`` 时临时建一个只含本题型的候选集——单题检查这样最
         方便；批量导入**一定要**传预先建好的 index，否则每道题都会重算一遍
         全部候选。
         """
         target_fingerprint = dedup.fingerprint(self.fingerprint_parts(draft))
+
+        hints: list[dedup.DuplicateHint] = []
+        by_external = self.questions.find_by_external_id(course_id, draft.external_id)
+        if by_external is not None:
+            # 编号与题面都一致时说「完全相同」更准确；只有编号一致（题面被改过）
+            # 才说「编号相同」，让用户知道内容确实变了
+            hints.append(
+                dedup.DuplicateHint(
+                    question_id=by_external.id,
+                    exact=True,
+                    score=1.0,
+                    matched_by=(
+                        dedup.MatchBy.FINGERPRINT
+                        if by_external.fingerprint == target_fingerprint
+                        else dedup.MatchBy.EXTERNAL_ID
+                    ),
+                )
+            )
+
         target_shingles = dedup.shingles(self.similarity_parts(draft))
         pool = index or self.build_duplicate_index(course_id, [draft.type])
-        return dedup.rank_similar(target_fingerprint, target_shingles, pool.candidates, limit=limit)
+        for hint in dedup.rank_similar(
+            target_fingerprint, target_shingles, pool.candidates, limit=limit
+        ):
+            # 编号已经命中的那道题不再重复列出
+            if any(existing.question_id == hint.question_id for existing in hints):
+                continue
+            hints.append(hint)
+        return hints[:limit]
 
     @staticmethod
     def _existing_parts(question: Question, *, with_answer: bool = True) -> list[str]:

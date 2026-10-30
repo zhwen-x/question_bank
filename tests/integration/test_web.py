@@ -659,6 +659,29 @@ def test_preview_marks_exact_duplicate(client: TestClient, seeded: str) -> None:
     assert "跳过（已存在）" in body
 
 
+def test_preview_explains_external_id_match(
+    client: TestClient, seeded: str, session: Session
+) -> None:
+    """编号相同但题面被改过时，预览要说清楚「凭编号判定」并显示题面差异。
+
+    这正是「从 docx 建库、再用 md 导入」会遇到的情况：pandoc 往返让题面有细微
+    差异、指纹对不上，但编号一致，upsert 会认出是同一道题。预览必须和 upsert
+    说法一致，否则「预览说新建、提交却跳过」比没有预览更糟。
+    """
+    edited = SIMILAR_SOURCE.replace(
+        "【题干】下列代码执行后 $n$ 的值是？",
+        "【题干】下列代码执行后 $n$ 的值是多少？（题面改过）",
+    )
+    token = upload(client, seeded, "改过的题.md", edited)
+    html = client.get(f"/import/{token}?course_id={seeded}").text
+    body = text_of(html)
+    assert "编号相同" in body
+    assert "即使题面被改过" in body
+    assert "跳过（已存在）" in body
+    # 题面差异要高亮出来
+    assert "<ins" in html
+
+
 def test_exact_duplicates_are_unchecked_by_default(client: TestClient, seeded: str) -> None:
     """重复导入同一份文件是最常见的误操作，默认不勾让「确认」保持安全。"""
     token = upload(client, seeded, "相似题.md", SIMILAR_SOURCE)

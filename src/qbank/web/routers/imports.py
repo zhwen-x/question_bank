@@ -131,6 +131,7 @@ def _build_preview(session: Session, plan: ImportPlan, policy: ConflictPolicy) -
                     label=hint.label,
                     score=hint.score,
                     exact=hint.exact,
+                    matched_by=hint.matched_by.value,
                     existing_excerpt=stem_excerpt(existing.stem, limit=120),
                     diff=segments,
                     change_count=change_count(segments),
