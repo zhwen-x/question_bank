@@ -51,7 +51,7 @@ class QuestionFilter:
     any_tag_ids: Sequence[str] = ()
     #: 限定在这批 id 内（全文检索的结果交进来）
     restrict_ids: Sequence[str] | None = None
-    #: 排除这批 id（已在选题篮里的、或指定不要的）
+    #: 排除这批 id。出 B 卷时用来避开 A 卷已经用掉的题
     exclude_ids: Sequence[str] = ()
     source_contains: str = ""
     #: 只要有答案的题。组卷导出答案卷时很需要。

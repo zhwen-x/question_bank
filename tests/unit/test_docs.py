@@ -29,6 +29,7 @@ DESIGN = ROOT / "docs" / "设计说明.md"
 BLUEPRINT_SPEC = ROOT / "docs" / "组卷蓝图规范.md"
 BLUEPRINT_EXAMPLE = ROOT / "docs" / "examples" / "组卷蓝图示例.yaml"
 TEMPLATE_GUIDE = ROOT / "docs" / "导出模板制作指南.md"
+CHANGELOG = ROOT / "CHANGELOG.md"
 
 #: 需要检查的全部文档
 DOCS = [
@@ -37,6 +38,7 @@ DOCS = [
     DESIGN,
     BLUEPRINT_SPEC,
     TEMPLATE_GUIDE,
+    CHANGELOG,
     ROOT / "docs" / "examples" / "导入模板示例.md",
 ]
 
@@ -72,15 +74,34 @@ def strip_code(text: str) -> str:
 
 
 # ------------------------------------------------------------------ 链接
+def _heading_slugs(markdown: str) -> set[str]:
+    """标题 → GitHub 风格锚点（只保留字母数字与中日韩，其余去掉）。"""
+    return {
+        re.sub(r"[^\w\u4e00-\u9fff]", "", heading).lower()
+        for heading in re.findall(r"^#+\s*(.+?)\s*$", markdown, re.M)
+    }
+
+
 @pytest.mark.parametrize("doc", DOCS, ids=lambda p: p.name)
 def test_links_resolve(doc: Path) -> None:
-    """文档里的相对链接都要指向真实存在的文件。"""
+    """相对链接要指向真实存在的文件，**而且锚点也要真的在**。
+
+    只查文件存在是不够的：`设计说明.md#八还没做的` 这个链接在章节从「八」
+    重编成「十」之后依然指向一个存在的文件，却跳不到任何地方——而读者点下去
+    只会落到文档开头，完全不知道自己错过了什么。
+    """
     broken = []
     for label, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", strip_code(doc.read_text("utf-8"))):
         if target.startswith(("http://", "https://", "#", "mailto:")):
             continue
-        if not (doc.parent / target.split("#")[0]).resolve().exists():
-            broken.append(f"[{label}]({target})")
+        path, _, anchor = target.partition("#")
+        resolved = (doc.parent / path).resolve()
+        if not resolved.exists():
+            broken.append(f"[{label}]({target}) → 文件不存在")
+        elif anchor and resolved.suffix == ".md":
+            slug = anchor.replace("-", "").lower()
+            if slug not in _heading_slugs(resolved.read_text("utf-8")):
+                broken.append(f"[{label}]({target}) → 目标文件里没有这个标题")
     assert not broken, f"{doc.name} 里有断链：{broken}"
 
 
@@ -461,3 +482,80 @@ def test_documented_export_formats_match_the_enum() -> None:
     table = README.read_text("utf-8").split("## 导出")[1].split("| 模板 |")[0]
     for fmt in ExportFormat:
         assert f"**{fmt.value}**" in table, f"README 的格式表里没有 {fmt.value}"
+
+
+def test_quoted_template_errors_match_the_real_wording() -> None:
+    """指南里抄的两段报错要和程序真的会说的话一致。
+
+    「差不多」不行：读者遇到问题时是拿报错去文档里搜的，搜不到就等于没写。
+    StrictUndefined 那条尤其容易抄短——Jinja 用的是完整限定名。
+    """
+    import tempfile
+
+    from jinja2 import UndefinedError
+
+    from qbank.config import Paths
+    from qbank.exchange.exporters.context import ItemContext
+    from qbank.exchange.exporters.templates import (
+        BUILTIN_DIR,
+        ExportFormat,
+        PaperTemplate,
+        TemplateNotFoundError,
+        get_template,
+        make_environment,
+    )
+
+    guide = TEMPLATE_GUIDE.read_text("utf-8")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = Paths(root=Path(tmp)).ensure()
+        half = paths.templates_dir / "paper" / "我的"
+        half.mkdir(parents=True)
+        (half / "paper.html.j2").write_text("x", encoding="utf-8")
+        with pytest.raises(TemplateNotFoundError) as excinfo:
+            get_template("我的", ExportFormat.DOCX, paths=paths)
+    assert str(excinfo.value) in guide, "「模板缺少…」的报错措辞和文档对不上"
+
+    template = PaperTemplate(key="standard", directory=BUILTIN_DIR / "standard", builtin=True)
+    environment = make_environment(template, ExportFormat.HTML)
+    item = ItemContext(
+        number=1, index=1, score=1, type_label="单选", is_objective=True, difficulty=3, stem="x"
+    )
+    with pytest.raises(UndefinedError) as undefined:
+        environment.from_string("{{ item.scores }}").render(item=item)
+    assert str(undefined.value) in guide, "StrictUndefined 的报错措辞和文档对不上"
+
+
+def test_documented_block_defaults_match_the_template() -> None:
+    """块默认值表里的数字要和模板里写的一致——改了字号忘了改文档是常事。"""
+    from qbank.exchange.exporters.templates import BUILTIN_DIR
+
+    html = (BUILTIN_DIR / "standard" / "paper.html.j2").read_text("utf-8")
+    actual = dict(re.findall(r"\{% block (\w+) %\}([^{]*)\{% endblock %\}", html))
+    table = TEMPLATE_GUIDE.read_text("utf-8").split("预留的块")[1].split("\n## ")[0]
+    checked = 0
+    for block in ("page_size", "page_margin", "body_size", "print_size", "title_size"):
+        value = actual.get(block, "").strip()
+        assert value, f"模板里 {block} 没有默认值"
+        assert f"`{value}`" in table, f"{block} 的默认值是 {value}，文档里没写这个数"
+        checked += 1
+    assert checked == 5
+
+
+# ------------------------------------------------------------ 变更记录
+def test_changelog_pending_matches_the_readme() -> None:
+    """变更记录的「还没做」和 README 的「还没做」必须是同一份清单。
+
+    两处各写一份的下场是其中一处先腐烂，而读者不知道该信哪个。
+    """
+    changelog = CHANGELOG.read_text("utf-8").split("### 还没做")[1].split("\n---")[0]
+    for item in ("qbz", "pywebview"):
+        assert item in changelog, f"变更记录的未完成清单里没有 {item}"
+        assert item in _pending_section(), f"README 的未完成清单里没有 {item}"
+
+
+def test_changelog_covers_every_milestone() -> None:
+    """每个已完成的里程碑都要有一节。漏记一个版本等于那段历史没人写。"""
+    text = CHANGELOG.read_text("utf-8")
+    for milestone in ("M0", "M1", "M2", "M3", "M4", "M5"):
+        assert f"## {milestone} " in text, f"变更记录里缺 {milestone}"
