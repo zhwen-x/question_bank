@@ -21,8 +21,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from qbank.core.enums import ConflictPolicy, QuestionType
-from qbank.core.models import Question, QuestionAnswer, QuestionRevision
+from qbank.core.enums import ConflictPolicy, Difficulty, QuestionStatus, QuestionType
+from qbank.core.models import Question, QuestionAnswer, QuestionRevision, new_id
+from qbank.core.repo.base import NotFoundError
 from qbank.core.repo.course import ChapterRepo, CourseRepo
 from qbank.core.repo.question import QuestionRepo
 from qbank.core.repo.tag import TagRepo
@@ -47,6 +48,27 @@ class DuplicateIndex:
 
     def __len__(self) -> int:
         return len(self.candidates)
+
+
+@dataclass(frozen=True, slots=True)
+class BulkResult:
+    """一次批量操作的结果。
+
+    ``skipped`` 既包含「找不到」也包含「本来就是这个值」——后者不该算作改动，
+    否则批量把 50 道题都设成「启用」会产生 50 条无意义的历史记录。
+    """
+
+    changed: int
+    skipped: int
+
+    @property
+    def summary(self) -> str:
+        if not self.changed:
+            return "没有题目需要改动"
+        text = f"已修改 {self.changed} 道"
+        if self.skipped:
+            text += f"，{self.skipped} 道无需改动"
+        return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,20 +232,35 @@ class QuestionService:
         return [part for part in parts if part]
 
     # ------------------------------------------------------------ 写
-    def create(self, course_id: str, draft: QuestionDraft) -> Question:
-        """新建一道题（含子题）。调用方负责事务边界。"""
+    def create(
+        self, course_id: str, draft: QuestionDraft, *, question_id: str | None = None
+    ) -> Question:
+        """新建一道题（含子题）。调用方负责事务边界。
+
+        ``question_id`` 只给 ``.qbz`` 交换包用：导入时沿用包里原来的 UUID，
+        这样同一道题在不同题库里是**同一个 id**。不沿用的话，把包发给同事、
+        他改了几道题、再把更新后的包发回来——这边已经认不出那是同一道题了
+        （题面变了，指纹对不上），只能当新题再建一遍。UUID 天然不冲突，沿用是
+        安全的。
+        """
         self.courses.get(course_id)  # 课程不存在时尽早失败，错误信息更清楚
-        question = self._build(course_id, draft)
+        question = self._build(course_id, draft, question_id=question_id)
         self.questions.add(question)
         self._reindex(question, draft)
         return question
 
     def _build(
-        self, course_id: str, draft: QuestionDraft, *, parent: Question | None = None
+        self,
+        course_id: str,
+        draft: QuestionDraft,
+        *,
+        parent: Question | None = None,
+        question_id: str | None = None,
     ) -> Question:
         chapter = self.chapters.ensure_path(course_id, draft.chapter)
         parts = self.fingerprint_parts(draft)
         question = Question(
+            id=question_id or new_id(),
             course_id=course_id,
             chapter_id=chapter.id if chapter else None,
             parent_id=parent.id if parent else None,
@@ -341,6 +378,7 @@ class QuestionService:
         draft: QuestionDraft,
         *,
         policy: ConflictPolicy = ConflictPolicy.SKIP,
+        question_id: str | None = None,
     ) -> WriteResult:
         """导入路径用：按冲突策略决定新建、更新还是跳过。
 
@@ -354,7 +392,9 @@ class QuestionService:
             course_id, dedup.fingerprint(self.fingerprint_parts(draft))
         )
         if existing is None:
-            return WriteResult(self.create(course_id, draft), True, False, False)
+            return WriteResult(
+                self.create(course_id, draft, question_id=question_id), True, False, False
+            )
 
         if policy is ConflictPolicy.SKIP:
             return WriteResult(existing, False, False, True)
@@ -438,6 +478,88 @@ class QuestionService:
         draft = QuestionDraft.model_validate(target.snapshot)
         return self.update(question_id, draft, note=f"回滚到第 {revision} 版")
 
+    # ------------------------------------------------------------ 批量
+    def bulk_edit(
+        self,
+        question_ids: Sequence[str],
+        *,
+        add_tags: Sequence[str] = (),
+        remove_tags: Sequence[str] = (),
+        chapter: str | None = None,
+        difficulty: Difficulty | None = None,
+        status: QuestionStatus | None = None,
+        note: str = "批量修改",
+    ) -> BulkResult:
+        """批量改章节 / 难度 / 状态 / 标签。
+
+        **仍然逐题存修改历史**。批量操作恰恰是最该能撤销的：一次点错影响的是
+        几十道题，而「改错了，一道道改回去」根本不现实。代价是几十条快照，
+        相比之下不值一提。
+
+        指纹不重算——参与指纹的是题干、选项与答案，这里改的四样都不在其中。
+
+        只有标签变动时才重建索引：标签进全文索引，章节、难度、状态不进。
+        """
+        changed = 0
+        skipped = 0
+        wanted_add = self.tags.resolve_many(add_tags) if add_tags else []
+        drop = {name.strip() for name in remove_tags if name.strip()}
+
+        for question_id in question_ids:
+            try:
+                question = self.questions.get_detailed(question_id)
+            except NotFoundError:
+                skipped += 1
+                continue
+            current = {tag.name: tag for tag in question.tags}
+            for tag in wanted_add:
+                current.setdefault(tag.name, tag)
+            for name in drop:
+                current.pop(name, None)
+            tags_changed = sorted(current) != sorted(tag.name for tag in question.tags)
+
+            target_chapter_id = question.chapter_id
+            if chapter is not None:
+                resolved = self.chapters.ensure_path(question.course_id, chapter)
+                target_chapter_id = resolved.id if resolved else None
+
+            if (
+                not tags_changed
+                and target_chapter_id == question.chapter_id
+                and (difficulty is None or difficulty == question.difficulty)
+                and (status is None or status == question.status)
+            ):
+                skipped += 1
+                continue
+
+            self._snapshot(question, note=note)
+            if tags_changed:
+                question.tags = list(current.values())
+            question.chapter_id = target_chapter_id
+            if difficulty is not None:
+                question.difficulty = difficulty
+            if status is not None:
+                question.status = status
+            question.revision += 1
+            self.session.flush()
+
+            if tags_changed:
+                self._reindex(question, self.to_draft(question))
+            changed += 1
+        return BulkResult(changed=changed, skipped=skipped)
+
+    def bulk_delete(self, question_ids: Sequence[str]) -> BulkResult:
+        """批量移入回收站。可逐题恢复。"""
+        changed = 0
+        skipped = 0
+        for question_id in question_ids:
+            try:
+                self.delete(question_id)
+                changed += 1
+            except NotFoundError:
+                skipped += 1
+        return BulkResult(changed=changed, skipped=skipped)
+
     def delete_course(self, course_id: str) -> int:
         """删掉一门课，连同它的章节、题目与试卷，并清掉检索索引。
 
@@ -457,6 +579,10 @@ class QuestionService:
         for question_id in question_ids:
             self.search.remove(question_id)
         self.courses.delete(course_id)
+        # 题目与试卷是**数据库**级联删掉的（passive_deletes），SQLAlchemy 并不
+        # 知道它们没了，身份映射里还留着一堆指向不存在行的对象。不失效的话，
+        # 同一会话里后续的 session.get 会把它们当活的交回来。
+        self.session.expire_all()
         return len(question_ids)
 
     # ------------------------------------------------------------ 维护

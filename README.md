@@ -2,7 +2,7 @@
 
 跨平台（macOS / Linux / Windows）本地题库客户端：按**课程 → 章节 → 标签**管理含
 图片、公式、表格的多类型题目，支持按模板从 Word / Markdown / HTML 批量导入，
-按蓝图自动组卷，并导出为 Markdown / HTML / Word / PDF。
+按蓝图自动组卷，并导出为 Markdown / HTML / Word / PDF。可打包成双击即用的桌面应用。
 
 ## 它解决什么问题
 
@@ -27,12 +27,16 @@ qbank 把题目收进一个结构化的本地库，让「找题」变成几秒�
   三套预设模板，Word 里的公式是原生可编辑的
 - **图形界面**：课程章节树、题目列表与筛选、七种题型的结构化编辑器、导入向导、
   组卷、试卷编辑与导出
+- **批量操作**：勾选若干道题，一次改标签、章节、难度、状态，或整批移入回收站
+- **`.qbz` 交换包**：整库（或单门课）备份、共享、恢复——含题目、章节、标签、
+  图片与试卷
+- **桌面应用**：`qbank desktop` 开原生窗口；可用 PyInstaller 打成双击即用的包
 - **修改历史与回滚**、回收站、标签合并、孤儿图片清理、环境自检
 
 **还没做**：
 
-- `.qbz` 整库交换包
-- 桌面外壳（pywebview）与打包分发
+- Web 端部署文档与认证接入点
+- Postgres 切换验证
 
 设计上为它们预留的位置见[设计说明](docs/设计说明.md)最后一节。
 
@@ -78,7 +82,14 @@ qbank paper export <试卷id前8位> -f pdf -l answers     # 答案与评分标�
 或者直接用图形界面：
 
 ```bash
-qbank serve
+qbank serve      # 浏览器里打开
+qbank desktop    # 原生窗口（需要 pip install "qbank[desktop]"）
+```
+
+**定期备份**——删课程是硬删除，没有回收站：
+
+```bash
+qbank bundle export -o ~/备份/题库.qbz
 ```
 
 ## 图形界面
@@ -98,6 +109,8 @@ qbank serve
 - **试卷编辑**：分节、逐题或整节配分、上下移、跨节移动、移出；可切「带答案 /
   学生视角」逐题核对；一键再出一套不重题的 B 卷
 - **导出**：选格式、版面与模板，点一下就下载；Markdown 的旁挂图片会自动打成 zip
+- **批量修改**：勾选若干道题，一次改标签、章节、难度、状态，或整批移入回收站；
+  逐题留修改历史，改错了能一道道回滚
 - **修改历史**：每次保存前自动存一份快照，可回滚；回滚本身也会留痕
 - **标签管理**：合并同义标签（「循环」「循环结构」「while循环」）
 - **状态与自检**：能力检查、题库规模、索引是否过期、孤儿图片清理
@@ -161,6 +174,8 @@ qbank batch rollback <批次id前8位>
 | `qbank paper rm <id>` | 删除试卷（默认进回收站） |
 | `qbank paper export <id> -f pdf` | 导出 md/html/docx/pdf，`-l` 选版面 |
 | `qbank paper templates` | 列出导出模板，`--copy` 拷一套出来改 |
+| `qbank bundle export / import / info` | `.qbz` 交换包：备份、共享、恢复 |
+| `qbank desktop` | 在原生窗口里打开 |
 | `qbank question list --type/--difficulty/--tag/-s` | 筛选与全文检索 |
 | `qbank question show <id>` | 查看一道题（`--yaml` 可导出后再导入） |
 | `qbank question add <课程> <文件>` | 从 YAML/JSON 录入，面向脚本化 |
@@ -245,12 +260,67 @@ qbank paper export <id> -f pdf -t exam            # 换一套模板
 改模板：`qbank paper templates --copy standard --as 我的`，改完用
 `-t 我的` 导出。详见 **[导出模板制作指南](docs/导出模板制作指南.md)**。
 
+## 备份与共享
+
+**`.qbz` 交换包是本系统唯一的备份手段。** 删课程是硬删除，连题目与试卷一起没，
+没有回收站也没有撤销——所以定期导一份放别处：
+
+```bash
+qbank bundle export -o ~/备份/题库.qbz          # 全部课程
+qbank bundle export -c 数据结构 -o 数据结构.qbz   # 只导一门课
+qbank bundle info 题库.qbz                      # 看看里面有什么
+qbank bundle import 题库.qbz --dry-run          # 先看会发生什么
+qbank bundle import 题库.qbz
+```
+
+包里有：课程与章节、题目（含图片与子题）、标签及其分类、试卷（含冻结的题面
+快照）。**不含**修改历史与导入批次记录——它们是本地的操作痕迹，对搬库没有意义。
+
+要点：
+
+- **课程按名字合并**，题目与试卷**按 id 认重**。同一个包导两次不会把东西翻倍
+- **题目的 UUID 跨库保持不变**。所以「发给同事 → 他改几道 → 再发回来」能认出
+  那是同一道题，而不是当成一批新题再建一遍
+- 题目已存在时按 `--on-conflict` 处理（`skip` / `overwrite` / `new_revision` /
+  `create_copy`），和文件导入是同一套策略
+- **试卷即使一道原题都没导进来也完整**——题面冻结在卷子里，只是点不回原题
+
+## 桌面应用
+
+```bash
+pip install -e ".[web,desktop]"
+qbank desktop
+```
+
+界面和 `qbank serve` 完全一样，只是套了个原生窗口、用随机端口（不会和已经开着
+的 `qbank serve` 抢 8765）。
+
+打成双击即用的包：
+
+```bash
+pip install -e ".[web,desktop,package]"
+pyinstaller packaging/qbank.spec --noconfirm
+```
+
+产出在 `dist/`：macOS 是 `qbank.app`，Windows / Linux 是 `dist/qbank/`。
+包里捆了 pandoc（Word 导入导出），**默认不捆 PDF 支持**（省约 140 MB；PDF 可以
+用「导出 HTML 再浏览器打印」代替）。细节与取舍见
+**[打包分发指南](docs/打包分发指南.md)**。
+
+打包版同时也是命令行：
+
+```bash
+dist/qbank.app/Contents/MacOS/qbank doctor
+dist/qbank.app/Contents/MacOS/qbank bundle export -o 备份.qbz
+```
+
 ## 文档
 
 - [设计说明](docs/设计说明.md) —— 为什么这样做，以及被实测推翻过的设计
 - [导入模板规范](docs/导入模板规范.md) —— 批量导入前先读这篇
 - [组卷蓝图规范](docs/组卷蓝图规范.md) —— 蓝图的完整字段
 - [导出模板制作指南](docs/导出模板制作指南.md) —— 改版面、做自己的模板
+- [打包分发指南](docs/打包分发指南.md) —— 打成桌面应用，以及捆了什么没捆什么
 - [变更记录](CHANGELOG.md) —— 各里程碑做了什么、推翻过什么
 
 ## 开发
@@ -266,8 +336,9 @@ pytest
 | 包 | 职责 | 允许依赖 |
 |---|---|---|
 | `qbank.core` | 领域模型、存储、内容渲染、查重、组卷 | 不得依赖 `web` |
-| `qbank.exchange` | 导入导出、pandoc 封装 | 可依赖 `core` |
+| `qbank.exchange` | 导入导出、`.qbz` 交换包、pandoc 封装 | 可依赖 `core` |
 | `qbank.web` | FastAPI + Jinja2（零前端依赖） | 可依赖 `core` / `exchange` |
+| `qbank.desktop` | pywebview 外壳 | 只负责开窗，不含业务 |
 | `qbank.cli` | Typer 命令行 | 可依赖全部 |
 
 这条约束是「后续可以部署成 Web 端」唯一的技术保障——只要界面层没渗进内核，

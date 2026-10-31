@@ -612,3 +612,54 @@ def test_copy_template_for_editing(paper_bank: Path) -> None:
     again = runner.invoke(app, ["paper", "templates", "--copy", "standard", "--as", "我的"])
     assert again.exit_code == 1
     assert "已存在" in again.output
+
+
+# ================================================================= 交换包
+def test_bundle_round_trip(paper_bank: Path, tmp_path: Path) -> None:
+    target = tmp_path / "备份.qbz"
+    output = run("bundle", "export", "-o", str(target))
+    assert "道题" in output
+    assert target.is_file()
+
+    info = run("bundle", "info", str(target))
+    assert "格式版本：1" in info
+    assert "不含：修改历史" in info, "没带的东西要写明"
+
+
+def test_bundle_dry_run_writes_nothing(paper_bank: Path, tmp_path: Path) -> None:
+    target = tmp_path / "备份.qbz"
+    run("bundle", "export", "-o", str(target))
+    before = run("info")
+    output = run("bundle", "import", str(target), "--dry-run")
+    assert "没有写入任何内容" in output
+    assert run("info") == before
+
+
+def test_bundle_import_is_idempotent(paper_bank: Path, tmp_path: Path) -> None:
+    target = tmp_path / "备份.qbz"
+    run("bundle", "export", "-o", str(target))
+    again = run("bundle", "import", str(target))
+    assert "跳过" in again
+    assert "20 道" in run("info"), "重复导入不该把题目翻倍"
+
+
+def test_bundle_info_on_a_broken_file(tmp_path: Path) -> None:
+    broken = tmp_path / "坏的.qbz"
+    broken.write_text("不是 zip", encoding="utf-8")
+    result = runner.invoke(app, ["bundle", "info", str(broken)])
+    assert result.exit_code == 1
+    assert "zip" in result.output
+
+
+def test_bundle_rejects_bad_conflict_policy(paper_bank: Path, tmp_path: Path) -> None:
+    target = tmp_path / "备份.qbz"
+    run("bundle", "export", "-o", str(target))
+    result = runner.invoke(app, ["bundle", "import", str(target), "--on-conflict", "乱写"])
+    assert result.exit_code == 1
+    assert "skip" in result.output
+
+
+def test_course_delete_points_at_the_backup(paper_bank: Path) -> None:
+    """删课程是硬删除。提示里必须给出唯一的恢复途径。"""
+    result = runner.invoke(app, ["course", "rm", "数据结构"], input="n\n")
+    assert "bundle export" in result.output

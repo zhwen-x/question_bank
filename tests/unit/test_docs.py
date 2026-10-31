@@ -29,6 +29,7 @@ DESIGN = ROOT / "docs" / "设计说明.md"
 BLUEPRINT_SPEC = ROOT / "docs" / "组卷蓝图规范.md"
 BLUEPRINT_EXAMPLE = ROOT / "docs" / "examples" / "组卷蓝图示例.yaml"
 TEMPLATE_GUIDE = ROOT / "docs" / "导出模板制作指南.md"
+PACKAGING_GUIDE = ROOT / "docs" / "打包分发指南.md"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
 #: 需要检查的全部文档
@@ -38,6 +39,7 @@ DOCS = [
     DESIGN,
     BLUEPRINT_SPEC,
     TEMPLATE_GUIDE,
+    PACKAGING_GUIDE,
     CHANGELOG,
     ROOT / "docs" / "examples" / "导入模板示例.md",
 ]
@@ -549,13 +551,50 @@ def test_changelog_pending_matches_the_readme() -> None:
     两处各写一份的下场是其中一处先腐烂，而读者不知道该信哪个。
     """
     changelog = CHANGELOG.read_text("utf-8").split("### 还没做")[1].split("\n---")[0]
-    for item in ("qbz", "pywebview"):
-        assert item in changelog, f"变更记录的未完成清单里没有 {item}"
-        assert item in _pending_section(), f"README 的未完成清单里没有 {item}"
+    readme = _pending_section()
+    for item in ("Web 端", "Postgres"):
+        assert item in changelog, f"变更记录的未完成清单里没有「{item}」"
+        assert item in readme, f"README 的未完成清单里没有「{item}」"
+    # 已经做完的不该还挂在任何一处
+    for done in ("qbz", "pywebview"):
+        assert done not in changelog, f"「{done}」已经做完了，从变更记录的未完成清单里删掉"
+        assert done not in readme, f"「{done}」已经做完了，从 README 的未完成清单里删掉"
 
 
 def test_changelog_covers_every_milestone() -> None:
     """每个已完成的里程碑都要有一节。漏记一个版本等于那段历史没人写。"""
     text = CHANGELOG.read_text("utf-8")
-    for milestone in ("M0", "M1", "M2", "M3", "M4", "M5"):
+    for milestone in ("M0", "M1", "M2", "M3", "M4", "M5", "M6"):
         assert f"## {milestone} " in text, f"变更记录里缺 {milestone}"
+
+
+# ---------------------------------------------- 打包分发指南
+def test_packaging_guide_matches_the_spec() -> None:
+    """指南里说捆了什么，spec 里就得真的捆了什么。"""
+    guide = PACKAGING_GUIDE.read_text("utf-8")
+    spec = (ROOT / "packaging" / "qbank.spec").read_text("utf-8")
+
+    assert "QBANK_BUNDLE_PDF" in guide
+    assert "QBANK_BUNDLE_PDF" in spec, "指南说有这个开关，spec 里却没有"
+    assert "console=False" in spec
+    assert "console=False" in guide, "指南提到不要做成 console 程序，要和 spec 对得上"
+    assert "NSAllowsLocalNetworking" in spec
+    assert "NSAllowsLocalNetworking" in guide
+
+
+def test_packaging_guide_lists_the_collected_packages() -> None:
+    """指南里点名的那几个包，spec 里要真的收了它们的数据文件。"""
+    guide = PACKAGING_GUIDE.read_text("utf-8")
+    spec = (ROOT / "packaging" / "qbank.spec").read_text("utf-8")
+    listed = set(re.findall(r"`(qbank|pypandoc|latex2mathml|webview|alembic|markdown_it)`", guide))
+    assert len(listed) >= 5, f"指南里只点了 {listed}，抽取逻辑可能失效了"
+    for package in listed:
+        assert f'collect_data_files("{package}"' in spec, f"指南说收了 {package}，spec 里没有"
+
+
+def test_entry_point_keeps_the_cli_reachable() -> None:
+    """打包版必须还能当命令行用——否则 doctor 和 bundle export 都够不着。"""
+    entry = (ROOT / "packaging" / "entry.py").read_text("utf-8")
+    assert "qbank.cli" in entry
+    assert "sys.argv" in entry
+    assert "doctor" in PACKAGING_GUIDE.read_text("utf-8")

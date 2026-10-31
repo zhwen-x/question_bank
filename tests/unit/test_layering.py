@@ -91,3 +91,32 @@ def test_builtin_templates_live_inside_the_package() -> None:
         "exam",
         "standard",
     ]
+
+
+# --------------------------------------------------- 打包（PyInstaller）
+def test_spec_collects_the_data_files_that_are_read_at_runtime() -> None:
+    """这些包在运行时按路径读自己的数据文件，spec 里漏一个就会在用到那一刻才炸。
+
+    实测踩过：少了 ``latex2mathml`` 的符号表，Markdown 导出一切正常，一导 HTML
+    就 FileNotFoundError——而构建过程一个警告都没有。
+    """
+    spec = (SRC.parent.parent / "packaging" / "qbank.spec").read_text("utf-8")
+    for package in ("qbank", "pypandoc", "latex2mathml", "webview", "alembic"):
+        # qbank 那一行带了 includes=，所以只比到左引号为止
+        assert f'collect_data_files("{package}"' in spec, f"spec 没收 {package} 的数据文件"
+
+
+def test_spec_bundles_migrations() -> None:
+    """少了 migrations，打包版打开旧题库时不会升级表结构，而且一声不吭。"""
+    spec = (SRC.parent.parent / "packaging" / "qbank.spec").read_text("utf-8")
+    assert "migrations" in spec
+    assert "alembic.ini" in spec
+
+
+def test_frozen_paths_use_meipass() -> None:
+    """打包后源码不在磁盘上，``__file__`` 推出来的路径指向一个不存在的目录。"""
+    import inspect
+
+    from qbank.app import _project_root
+
+    assert "_MEIPASS" in inspect.getsource(_project_root)

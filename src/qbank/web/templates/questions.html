@@ -10,15 +10,23 @@
   </span>
 </div>
 
-{% if target_paper %}
+{% if selecting %}
 <div class="flash ok" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
   <span>
-    正在往《<strong>{{ target_paper.title }}</strong>》里挑题。
-    勾选后点页面底部的「加入试卷」；可以一边筛选、一边翻页、一边勾。
+    {% if target_paper %}
+      正在往《<strong>{{ target_paper.title }}</strong>》里挑题。
+    {% else %}
+      <strong>挑选模式</strong>：勾选若干道题，在页面底部批量改标签、章节、难度、状态。
+    {% endif %}
+    可以一边筛选、一边翻页、一边勾。
   </span>
   <span style="flex:1"></span>
-  <a class="btn btn-sm" href="/papers/{{ target_paper.id }}">看试卷</a>
-  <a class="btn btn-sm btn-quiet" href="/questions?course_id={{ course.id }}">退出挑题</a>
+  {% if target_paper %}
+    <a class="btn btn-sm" href="/papers/{{ target_paper.id }}">看试卷</a>
+  {% endif %}
+  <a class="btn btn-sm btn-quiet" href="/questions?{{ query_string | replace('select=1', '') }}">
+    退出挑选
+  </a>
 </div>
 {% endif %}
 
@@ -30,6 +38,7 @@
   {# 搜索框只在顶栏有一个。这里用隐藏字段把查询词带上，
      这样「先搜索、再按题型收窄」不会把搜索词丢掉。 #}
   <input type="hidden" name="q" value="{{ filters.q or '' }}">
+  {% if filters.select %}<input type="hidden" name="select" value="1">{% endif %}
   {% if filters.add_to %}<input type="hidden" name="add_to" value="{{ filters.add_to }}">{% endif %}
   {% if filters.section_id %}
     <input type="hidden" name="section_id" value="{{ filters.section_id }}">
@@ -93,6 +102,26 @@
   </div>
 </form>
 
+{% if rows and not selecting %}
+<div class="toolbar">
+  <a class="btn" href="/questions?{{ query_string }}&select=1">挑选 / 批量修改</a>
+  {% if all_papers %}
+  <form method="get" action="/questions" style="display:flex; gap:6px; align-items:center">
+    {% for key, value in filters.items() %}
+      {% if value and key not in ("add_to", "select", "tag") %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endif %}
+    {% endfor %}
+    {% for name in selected_tag_names %}<input type="hidden" name="tag" value="{{ name }}">{% endfor %}
+    <select name="add_to" aria-label="挑题加入哪份试卷">
+      {% for paper in all_papers %}<option value="{{ paper.id }}">{{ paper.title }}</option>{% endfor %}
+    </select>
+    <button type="submit" class="btn">挑题加入试卷</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if not rows %}
   <div class="empty">
     <h2>没有符合条件的题目</h2>
@@ -107,14 +136,16 @@
     </p>
   </div>
 {% else %}
-  {% if target_paper %}
-  {# 挑题模式：整张列表是一个表单。行不再整块可点——复选框和链接不能嵌在同一个
-     <a> 里，所以这里换成「勾选区 + 单独的查看链接」。 #}
-  <form method="post" action="/papers/{{ target_paper.id }}/add" id="pick-form">
+  {% if selecting %}
+  {# 挑选模式：整张列表是一个表单。行不再整块可点——复选框和链接不能嵌在同一个
+     <a> 里，所以这里换成「勾选区 + 单独的查看链接」。
+     加入试卷与批量修改共用这一套勾选，两种模式只是底部动作条不同。 #}
+  <form method="post" id="pick-form"
+        action="{% if target_paper %}/papers/{{ target_paper.id }}/add{% else %}/questions/bulk{% endif %}">
     <input type="hidden" name="back" value="/questions?{{ query_string }}">
     <div class="q-list">
       {% for row in rows %}
-        {% set used = row.id in already_used %}
+        {% set used = target_paper and row.id in already_used %}
         <div class="q-item pick-item {% if used %}used{% endif %}">
           <div class="meta">
             <label class="inline" style="font-weight:600">
@@ -134,24 +165,72 @@
     </div>
 
     <div class="sticky-actions">
-      <div class="field" style="flex:0 0 200px">
-        <label for="pick-section">加到哪个大题</label>
-        <select id="pick-section" name="section_id">
-          {% for section in target_paper.sections %}
-            <option value="{{ section.id }}"
-                    {% if section.id == target_section_id %}selected{% endif %}>
-              {{ section.title }}
-            </option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field" style="flex:0 0 130px">
-        <label for="pick-score">每题分值</label>
-        <input id="pick-score" name="score" type="number" step="0.5" min="0"
-               placeholder="题目自带">
-      </div>
+      <button type="button" class="btn btn-sm" data-select-all>全选本页</button>
+      <button type="button" class="btn btn-sm" data-select-none>全不选</button>
+      <span class="hint" data-select-count style="margin:0"></span>
       <span style="flex:1"></span>
-      <button type="submit" class="btn btn-primary">加入试卷</button>
+      {% if target_paper %}
+        <div class="field" style="flex:0 0 190px">
+          <label for="pick-section">加到哪个大题</label>
+          <select id="pick-section" name="section_id">
+            {% for section in target_paper.sections %}
+              <option value="{{ section.id }}"
+                      {% if section.id == target_section_id %}selected{% endif %}>
+                {{ section.title }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="flex:0 0 120px">
+          <label for="pick-score">每题分值</label>
+          <input id="pick-score" name="score" type="number" step="0.5" min="0"
+                 placeholder="题目自带">
+        </div>
+        <button type="submit" class="btn btn-primary">加入试卷</button>
+      {% else %}
+        <div class="field" style="flex:0 0 150px">
+          <label for="b-add">加标签</label>
+          <input id="b-add" name="add_tags" type="text" placeholder="循环、边界条件">
+        </div>
+        <div class="field" style="flex:0 0 130px">
+          <label for="b-remove">去标签</label>
+          <input id="b-remove" name="remove_tags" type="text">
+        </div>
+        <div class="field" style="flex:0 0 170px">
+          <label for="b-chapter">移到章节</label>
+          <select id="b-chapter" name="chapter_path">
+            <option value="">不变</option>
+            {% for chapter in chapters %}
+              <option value="{{ chapter.path }}">{{ chapter.path }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="flex:0 0 110px">
+          <label for="b-diff">难度</label>
+          <select id="b-diff" name="difficulty">
+            <option value="">不变</option>
+            {% for level in difficulties %}
+              <option value="{{ level.value }}">{{ level.value }} · {{ level.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="flex:0 0 110px">
+          <label for="b-status">状态</label>
+          <select id="b-status" name="status">
+            <option value="">不变</option>
+            {% for state in statuses %}
+              <option value="{{ state.value }}">{{ state.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {# 两个按钮绑在一起换行，否则「移入回收站」会被挤到下一行独占一条，
+           看着像是另一个工具条 #}
+        <div style="display:flex; gap:6px; align-items:flex-end">
+          <button type="submit" class="btn btn-primary" name="action" value="edit">应用</button>
+          <button type="submit" class="btn btn-danger" name="action" value="delete"
+                  data-confirm="把勾选的题移入回收站？可以再恢复。">移入回收站</button>
+        </div>
+      {% endif %}
     </div>
   </form>
   {% else %}

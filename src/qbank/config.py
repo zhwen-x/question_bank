@@ -7,11 +7,22 @@ macOS / Linux / Windows 三平台一致性的唯一保障点。
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 from platformdirs import PlatformDirs
+
+
+def is_frozen() -> bool:
+    """跑在 PyInstaller 打出来的包里吗？
+
+    打包版里 ``pip install`` 是无效建议——包是只读的，装了也进不去。凡是
+    「装个什么就好了」的提示，都要先问一句这个，否则给出的是一条走不通的路。
+    """
+    return bool(getattr(sys, "frozen", False))
+
 
 APP_NAME = "qbank"
 APP_AUTHOR = "qbank"

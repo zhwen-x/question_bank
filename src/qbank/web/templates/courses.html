@@ -63,7 +63,10 @@
             {{ row.papers }} 份试卷{% endif %} —— 输入课程名确认
           </label>
           <input name="confirm_name" type="text" placeholder="{{ row.course.name }}" required>
-          <div class="hint">不可撤销。建议先导出备份。</div>
+          <div class="hint">
+            不可撤销，也没有回收站。删完只能从 <code>.qbz</code> 交换包恢复——
+            先备份：<code>qbank bundle export -c {{ row.course.name }}</code>
+          </div>
         </div>
         <button type="submit" class="btn btn-sm btn-danger">永久删除</button>
       </form>

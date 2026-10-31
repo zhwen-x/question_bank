@@ -88,14 +88,14 @@ def _number(form: FormData, key: str, *, default: float = 0.0) -> float:
         return default
 
 
-def _split_tags(raw: str) -> tuple[str, ...]:
+def split_tags(raw: str) -> tuple[str, ...]:
     """标签输入框：逗号、顿号、分号、空格都当分隔符，并去重。
 
-    >>> _split_tags("循环, 边界条件、while")
+    >>> split_tags("循环, 边界条件、while")
     ('循环', '边界条件', 'while')
-    >>> _split_tags("循环 循环, 循环")
+    >>> split_tags("循环 循环, 循环")
     ('循环',)
-    >>> _split_tags("  ")
+    >>> split_tags("  ")
     ()
     """
     seen: dict[str, None] = {}
@@ -343,7 +343,7 @@ def parse_question_form(form: FormData) -> QuestionDraft:
                 "difficulty": difficulty_value,
                 "score": _number(form, "score"),
                 "est_minutes": int(_number(form, "est_minutes")),
-                "tags": _split_tags(_text(form, "tags")),
+                "tags": split_tags(_text(form, "tags")),
                 "source": _text(form, "source"),
                 "status": status_value,
                 "external_id": _text(form, "external_id"),

@@ -850,3 +850,82 @@ def test_import_word_through_the_wizard(
     preview = client.get(f"/import/{token}?course_id={course_id}")
     assert preview.status_code == 200
     assert "解析出 3 道题" in text_of(preview.text)
+
+
+# ------------------------------------------------------------ 批量操作
+def test_select_mode_shows_checkboxes_and_actions(client: TestClient, seeded: str) -> None:
+    response = client.get(f"/questions?course_id={seeded}&select=1")
+    assert response.status_code == 200
+    body = text_of(response.text)
+    assert 'name="question_id"' in response.text
+    assert "挑选模式" in body
+    for action in ("加标签", "去标签", "移到章节", "难度", "状态", "移入回收站"):
+        assert action in body
+
+
+def test_plain_list_has_no_checkboxes(client: TestClient, seeded: str) -> None:
+    """默认列表仍然是「整行可点进详情」，不该被勾选框挤占。"""
+    response = client.get(f"/questions?course_id={seeded}")
+    assert 'name="question_id"' not in response.text
+    assert "挑选 / 批量修改" in text_of(response.text)
+
+
+def test_bulk_add_tag_and_status(client: TestClient, seeded: str, session: Session) -> None:
+    repo = QuestionRepo(session)
+    ids = [q.id for q in repo.list_all(QuestionFilter(course_id=seeded))][:3]
+    response = client.post(
+        "/questions/bulk",
+        data={
+            "action": "edit",
+            "question_id": ids,
+            "add_tags": "期末重点",
+            "status": "active",
+            "back": f"/questions?course_id={seeded}&select=1",
+        },
+        follow_redirects=True,
+    )
+    assert "已修改 3 道" in text_of(response.text)
+    assert "挑选模式" in text_of(response.text), "改完要回到原来那页，而不是弹走"
+    session.expire_all()
+    for question_id in ids:
+        question = repo.get_detailed(question_id)
+        assert "期末重点" in {tag.name for tag in question.tags}
+        assert question.status.value == "active"
+
+
+def test_bulk_edit_keeps_history(client: TestClient, seeded: str, session: Session) -> None:
+    """批量改最该能撤销——一次点错影响几十道题。"""
+    repo = QuestionRepo(session)
+    question_id = repo.list_all(QuestionFilter(course_id=seeded))[0].id
+    client.post(
+        "/questions/bulk",
+        data={"action": "edit", "question_id": [question_id], "difficulty": "5"},
+    )
+    session.expire_all()
+    assert len(repo.get_detailed(question_id).revisions) == 1
+
+
+def test_bulk_delete_goes_to_trash(client: TestClient, seeded: str, session: Session) -> None:
+    repo = QuestionRepo(session)
+    ids = [q.id for q in repo.list_all(QuestionFilter(course_id=seeded))][:2]
+    response = client.post(
+        "/questions/bulk",
+        data={"action": "delete", "question_id": ids, "back": "/trash"},
+        follow_redirects=True,
+    )
+    assert "移入回收站" in text_of(response.text)
+    session.expire_all()
+    assert len(repo.list_trash()) == 2
+
+
+def test_bulk_with_nothing_selected(client: TestClient, seeded: str) -> None:
+    response = client.post(
+        "/questions/bulk", data={"action": "edit", "status": "active"}, follow_redirects=True
+    )
+    assert "一道题都没勾选" in text_of(response.text)
+
+
+def test_select_state_survives_filtering(client: TestClient, seeded: str) -> None:
+    response = client.get(f"/questions?course_id={seeded}&select=1&type=single_choice")
+    assert "挑选模式" in text_of(response.text)
+    assert 'name="select" value="1"' in response.text

@@ -11,6 +11,7 @@ Alembic 的存在，老用户升级也不会被漏掉。
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,8 +23,26 @@ from sqlalchemy.orm import Session, sessionmaker
 from qbank.config import Paths, get_paths
 from qbank.core.db import init_schema, make_engine, make_session_factory, session_scope
 
-#: alembic.ini 与 migrations/ 所在的目录（源码树根）
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+def _project_root() -> Path:
+    """``alembic.ini`` 与 ``migrations/`` 在哪。
+
+    打包成单文件后，源码不在磁盘上的源码树里了，``__file__`` 推出来的路径指向
+    一个不存在的目录。PyInstaller 会把捆进去的数据解到 ``sys._MEIPASS``，
+    所以冻结状态下要认那个。
+
+    不处理的话，``_head_revision()`` 会静默返回 ``None``（它吞掉所有异常），
+    于是打包版**永远不会跑数据库迁移**——升级后打开旧题库，表结构还是旧的，
+    而程序一声不吭。
+    """
+    frozen = getattr(sys, "_MEIPASS", None)
+    if frozen:
+        return Path(frozen)
+    return Path(__file__).resolve().parents[2]
+
+
+#: alembic.ini 与 migrations/ 所在的目录
+PROJECT_ROOT = _project_root()
 
 
 class SchemaOutdatedError(RuntimeError):

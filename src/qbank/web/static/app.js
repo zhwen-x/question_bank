@@ -287,9 +287,21 @@
   }
 
   /* ------------------------------------------------------ 危险操作确认 */
+
+  /* data-confirm 可以挂在 <form> 上，也可以挂在某一个提交按钮上。
+
+     后者是必需的：批量操作那条工具条里，「应用」和「移入回收站」共用同一个
+     表单，确认只能属于其中一个按钮。早先只接了 form 上的，结果挂在按钮上的
+     那句确认从不弹出——一个没有任何提示的批量删除。 */
   function setupConfirm(form) {
     form.addEventListener("submit", function (event) {
       if (!window.confirm(form.dataset.confirm)) event.preventDefault();
+    });
+  }
+
+  function setupConfirmButton(button) {
+    button.addEventListener("click", function (event) {
+      if (!window.confirm(button.dataset.confirm)) event.preventDefault();
     });
   }
 
@@ -301,6 +313,7 @@
     root.querySelectorAll("[data-repeater]").forEach(setupRepeater);
     root.querySelectorAll("[data-type-switch]").forEach(setupTypeSwitch);
     root.querySelectorAll("form[data-confirm]").forEach(setupConfirm);
+    root.querySelectorAll("button[data-confirm]").forEach(setupConfirmButton);
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -359,12 +372,25 @@
     });
   }
 
-  function setupBulkSelect() {
-    const boxes = () => [...document.querySelectorAll('input[name="selected"]')];
-    const counter = document.querySelector("[data-selected-count]");
+  /* 勾选工具条。导入向导（name="selected"）与题目挑选（name="question_id"）
+     用的是同一套按钮，所以这里按字段名参数化，而不是写两遍。
+
+     已禁用的复选框要跳过：「已在卷中」的那些点「全选」不该把它们也勾上——
+     浏览器不会提交 disabled 的字段，于是计数会和实际提交的数量对不上。 */
+  function setupBulkSelect(field, counterAttribute) {
+    const boxes = () =>
+      [...document.querySelectorAll('input[name="' + field + '"]')].filter((b) => !b.disabled);
+    const counter = document.querySelector("[" + counterAttribute + "]");
+    const plain = counterAttribute === "data-select-count";
 
     function refresh() {
-      if (counter) counter.textContent = String(boxes().filter((b) => b.checked).length);
+      if (!counter) return;
+      const picked = boxes().filter((b) => b.checked).length;
+      counter.textContent = plain
+        ? picked
+          ? "已选 " + picked + " 道"
+          : "一道都没选"
+        : String(picked);
     }
 
     const actions = {
@@ -440,7 +466,12 @@
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("[data-dropzone]").forEach(setupDropzone);
     document.querySelectorAll("[data-reload-on-change]").forEach(setupReload);
-    if (document.querySelector('input[name="selected"]')) setupBulkSelect();
+    if (document.querySelector('input[name="selected"]')) {
+      setupBulkSelect("selected", "data-selected-count");
+    }
+    if (document.querySelector('input[name="question_id"]')) {
+      setupBulkSelect("question_id", "data-select-count");
+    }
     setupSectionRows();
   });
 })();

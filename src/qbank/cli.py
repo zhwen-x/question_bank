@@ -37,6 +37,14 @@ from qbank.core.services.paper import (
 from qbank.core.services.question import QuestionService
 from qbank.core.services.selection import BlueprintError, SelectionResult
 from qbank.doctor import Level, Status, run_checks
+from qbank.exchange.bundle import (
+    BundleError,
+    BundleService,
+    default_export_name,
+    export_bundle,
+    plan_import,
+    read_manifest,
+)
 from qbank.exchange.export_service import (
     ExportService,
     available_formats,
@@ -68,6 +76,7 @@ question_app = typer.Typer(help="题目管理", no_args_is_help=True)
 asset_app = typer.Typer(help="图片资源管理", no_args_is_help=True)
 batch_app = typer.Typer(help="导入批次", no_args_is_help=True)
 paper_app = typer.Typer(help="试卷与组卷", no_args_is_help=True)
+bundle_app = typer.Typer(help="`.qbz` 交换包：备份、共享、恢复", no_args_is_help=True)
 app.add_typer(course_app, name="course")
 app.add_typer(chapter_app, name="chapter")
 app.add_typer(tag_app, name="tag")
@@ -75,6 +84,7 @@ app.add_typer(question_app, name="question")
 app.add_typer(asset_app, name="asset")
 app.add_typer(batch_app, name="batch")
 app.add_typer(paper_app, name="paper")
+app.add_typer(bundle_app, name="bundle")
 
 _STATUS_MARK = {Status.OK: "✓", Status.DEGRADED: "!", Status.MISSING: "✗"}
 _STATUS_COLOR = {
@@ -305,7 +315,10 @@ def course_remove(
                     f"将删除课程「{course.name}」及其 {count} 道题目{extra}，不可撤销。",
                     fg=typer.colors.YELLOW,
                 )
-                typer.secho("建议先执行备份导出。", fg=typer.colors.YELLOW)
+                typer.secho(
+                    f"删完只能从交换包恢复。现在备份：qbank bundle export -c {course.name}",
+                    fg=typer.colors.YELLOW,
+                )
                 typer.confirm("确定继续？", abort=True)
             QuestionService(session).delete_course(course_id)
         typer.secho(f"已删除课程「{name}」。", fg=typer.colors.GREEN)
@@ -1457,3 +1470,126 @@ def paper_templates(
         typer.secho(f"{key:12} [{item.origin}] {formats}", bold=True)
         if item.description:
             typer.echo(f"             {item.description}")
+
+
+# ================================================================= 交换包
+@bundle_app.command("export")
+def bundle_export(
+    course: Annotated[str, typer.Option("--course", "-c", help="只导某一门课；留空导全部")] = "",
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="输出文件")] = None,
+    papers: Annotated[bool, typer.Option("--papers/--no-papers", help="是否带上试卷")] = True,
+) -> None:
+    """把题库打成一个 `.qbz` 交换包。
+
+    这是本系统**唯一**的备份与共享手段：删课程是硬删除、连带题目与试卷一起没，
+    在此之前没有任何恢复路径。定期导一份放别处。
+    """
+    context = _open()
+    try:
+        course_ids = [_resolve_course(context, course)] if course else None
+        with context.session() as session:
+            chosen = [
+                item
+                for item in CourseRepo(session).list_all()
+                if course_ids is None or item.id in course_ids
+            ]
+            if not chosen:
+                typer.secho("题库里还没有课程，没什么可导的。", fg=typer.colors.YELLOW)
+                return
+            target = output or (context.paths.backups_dir / default_export_name(chosen))
+            result = export_bundle(
+                session, target, course_ids=course_ids, include_papers=papers, paths=context.paths
+            )
+            summary = result.summary
+        typer.secho(f"✓ {summary}", fg=typer.colors.GREEN)
+        typer.echo(f"{target}")
+    finally:
+        context.close()
+
+
+@bundle_app.command("info")
+def bundle_info(
+    source: Annotated[Path, typer.Argument(help="`.qbz` 文件")],
+) -> None:
+    """看一个交换包里有什么，不导入。"""
+    try:
+        manifest = read_manifest(source)
+    except BundleError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    typer.secho(source.name, bold=True)
+    typer.echo(f"内容：{manifest.summary}")
+    typer.echo(f"导出于：{manifest.exported_at}　qbank {manifest.qbank_version}")
+    typer.echo(f"格式版本：{manifest.format_version}")
+    if manifest.excludes:
+        typer.echo(f"不含：{'、'.join(manifest.excludes)}")
+
+
+@bundle_app.command("import")
+def bundle_import(
+    source: Annotated[Path, typer.Argument(help="`.qbz` 文件")],
+    on_conflict: Annotated[
+        str,
+        typer.Option(
+            "--on-conflict", help="题目已存在时：skip / overwrite / new_revision / create_copy"
+        ),
+    ] = ConflictPolicy.SKIP.value,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只看会发生什么，不写入")] = False,
+    papers: Annotated[bool, typer.Option("--papers/--no-papers", help="是否导入试卷")] = True,
+) -> None:
+    """把一个 `.qbz` 合并进当前题库。
+
+    课程按**名字**合并，题目按 id 认重（同一个库导出再导入就是恢复场景），
+    试卷按 id 认重——同一个包导两次不会变出两份一模一样的卷子。
+    """
+    try:
+        policy = ConflictPolicy(on_conflict.lower())
+    except ValueError as exc:
+        choices = "、".join(item.value for item in ConflictPolicy)
+        typer.secho(f"--on-conflict 只能是：{choices}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    context = _open()
+    try:
+        with context.session() as session:
+            try:
+                plan = plan_import(session, source)
+            except BundleError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            typer.echo(plan.describe(policy))
+            if dry_run:
+                typer.echo("\n（--dry-run：没有写入任何内容）")
+                return
+            result = BundleService(session, context.paths).import_bundle(
+                source, policy=policy, include_papers=papers
+            )
+            summary, errors, detached = result.summary, result.errors, result.detached_items
+        typer.secho(f"\n✓ {summary}", fg=typer.colors.GREEN)
+        if detached:
+            typer.secho(
+                f"有 {detached} 道试卷题目在本库里找不到原题（题面仍在卷子上，只是点不回原题）",
+                fg=typer.colors.YELLOW,
+            )
+        for message in errors[:10]:
+            typer.secho(f"  {message}", fg=typer.colors.YELLOW)
+        if len(errors) > 10:
+            typer.secho(f"  …… 另有 {len(errors) - 10} 条", fg=typer.colors.YELLOW)
+    finally:
+        context.close()
+
+
+@app.command()
+def desktop() -> None:
+    """在原生窗口里打开题库（桌面模式）。
+
+    里面跑的是和 `qbank serve` 完全一样的界面，只是套了个窗口、用的是随机端口，
+    不会和已经开着的 `qbank serve` 抢 8765。
+    """
+    from qbank import desktop as shell
+
+    try:
+        shell.run()
+    except shell.DesktopUnavailableError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc

@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 
-from qbank.config import get_paths
+from qbank.config import get_paths, is_frozen
 
 #: 中文检索的两个实测坑（见 content.segment）：FTS5 的 trigram 分词器对 2 字
 #: 中文词返回 0 条；jieba 的切分依赖上下文，会让「题在库里却搜不到」。
@@ -214,7 +214,11 @@ def _check_pdf() -> Check:
             level=Level.OPTIONAL,
             status=Status.MISSING,
             detail="未安装 playwright；其他三种格式不受影响",
-            remedy='pip install "qbank[pdf]"，再装内核或用系统已有的 Chrome',
+            remedy=(
+                "这个打包版没有捆 PDF 支持：请导出 HTML 后用浏览器「打印为 PDF」，版面完全一样"
+                if is_frozen()
+                else 'pip install "qbank[pdf]"，再装内核或用系统已有的 Chrome'
+            ),
         )
     return Check(
         name="PDF 导出",
@@ -223,6 +227,27 @@ def _check_pdf() -> Check:
         detail=found.detail,
         remedy="playwright install chromium（约 130MB），或装一个 Google Chrome；"
         "在此之前可导出 HTML 后用浏览器打印",
+    )
+
+
+def _check_desktop() -> Check:
+    """桌面外壳。缺了不影响任何功能——`qbank serve` 的界面完全一样。"""
+    from qbank import desktop
+
+    found = desktop.capability()
+    if found.available:
+        return Check(
+            name="桌面窗口",
+            level=Level.OPTIONAL,
+            status=Status.OK,
+            detail=f"{found.detail}，可用 `qbank desktop` 在原生窗口里打开",
+        )
+    return Check(
+        name="桌面窗口",
+        level=Level.OPTIONAL,
+        status=Status.MISSING,
+        detail=f"{found.detail}；用 `qbank serve` 在浏览器里打开，功能完全一样",
+        remedy="" if is_frozen() else 'pip install "qbank[desktop]"',
     )
 
 
@@ -246,6 +271,7 @@ _CHECKS = (
     _check_cjk_search,
     _check_pandoc,
     _check_pdf,
+    _check_desktop,
     _check_web,
 )
 

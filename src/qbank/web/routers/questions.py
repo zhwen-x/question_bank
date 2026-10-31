@@ -22,7 +22,7 @@ from qbank.core.repo.tag import TagRepo
 from qbank.core.services.asset import AssetService
 from qbank.core.services.question import QuestionService
 from qbank.web.deps import get_context, get_session
-from qbank.web.forms import FormError, parse_question_form
+from qbank.web.forms import FormError, parse_question_form, split_tags
 from qbank.web.nav import build_nav
 from qbank.web.presenters import build_rows, build_view, web_render_options
 from qbank.web.routers.assets import asset_url
@@ -65,6 +65,7 @@ def question_list(
     status: str = "",
     tag: list[str] = Query(default=[]),
     page: int = 1,
+    select: bool = False,
     add_to: str = "",
     section_id: str = "",
     msg: str = "",
@@ -125,8 +126,9 @@ def question_list(
         "difficulty": difficulty,
         "status": status,
         "tag": tag,
-        # 带着「正在往哪份卷子里加题」翻页和筛选——挑题是「一边翻一边勾」的
-        # 过程，这个状态一丢，每次翻页都要重新进入加题模式
+        # 带着「正在挑题」翻页和筛选——挑题是「一边翻一边勾」的过程，
+        # 这个状态一丢，每次翻页都要重新进入挑选模式
+        "select": "1" if (select or add_to) else "",
         "add_to": add_to,
         "section_id": section_id,
     }
@@ -166,6 +168,9 @@ def question_list(
             "statuses": list(QuestionStatus),
             "all_tags": list(tags_repo.list_all()),
             "selected_tag_names": [found.name for found in selected_tags],
+            "selecting": bool(select or add_to),
+            "all_papers": list(PaperRepo(session).list_all(course_id)),
+            "chapters": list(ChapterRepo(session).list_tree(course_id)),
             "target_paper": target_paper,
             "target_section_id": section_id,
             "already_used": already_used,
@@ -607,3 +612,43 @@ def trash_purge(
     for question in items:
         service.purge(question.id)
     return redirect_with("/trash", f"已永久删除 {len(items)} 道题")
+
+
+# ===================================================================== 批量
+@router.post("/questions/bulk")
+def question_bulk(
+    action: str = Form(""),
+    question_id: list[str] = Form(default=[]),
+    add_tags: str = Form(""),
+    remove_tags: str = Form(""),
+    chapter_path: str = Form(""),
+    difficulty: str = Form(""),
+    status: str = Form(""),
+    back: str = Form("/questions"),
+    session: Session = Depends(get_session),
+) -> RedirectResponse:
+    """批量改章节 / 难度 / 状态 / 标签，或批量移入回收站。
+
+    改完回到原来那页列表，而不是跳走——批量整理是「筛一批、改一批、再筛下一批」
+    的过程，每改一次就被弹走会让这件事变得很难做。
+    """
+    if not question_id:
+        return redirect_with(back, "一道题都没勾选", "warn")
+    service = QuestionService(session)
+
+    if action == "delete":
+        outcome = service.bulk_delete(question_id)
+        return redirect_with(back, f"已把 {outcome.changed} 道题移入回收站，可在回收站恢复", "ok")
+
+    try:
+        result = service.bulk_edit(
+            question_id,
+            add_tags=split_tags(add_tags),
+            remove_tags=split_tags(remove_tags),
+            chapter=chapter_path.strip() or None,
+            difficulty=Difficulty(int(difficulty)) if difficulty else None,
+            status=QuestionStatus(status) if status else None,
+        )
+    except (ValueError, NotFoundError) as exc:
+        return redirect_with(back, str(exc), "error")
+    return redirect_with(back, result.summary, "ok" if result.changed else "warn")
