@@ -2,13 +2,13 @@
 
 跨平台（macOS / Linux / Windows）本地题库客户端：按**课程 → 章节 → 标签**管理含
 图片、公式、表格的多类型题目，支持按模板从 Word / Markdown / HTML 批量导入，
-并按蓝图自动组卷。
+按蓝图自动组卷，并导出为 Markdown / HTML / Word / PDF。
 
 ## 它解决什么问题
 
 题目散落在各处 Word 和 Markdown 文件里，无法统一检索、无法复用、每次出卷都在复制粘贴。
 qbank 把题目收进一个结构化的本地库，让「找题」变成几秒钟的事，让「出卷」变成
-填一份蓝图。
+填一份蓝图，让「印卷子」变成点一下。
 
 ## 当前状态
 
@@ -23,13 +23,14 @@ qbank 把题目收进一个结构化的本地库，让「找题」变成几秒�
   组不齐时说清缺哪一类、放宽哪个条件能补上几道，**不默默少出几道**
 - **手工组卷**：一边翻题库一边勾选加入，分节、配分、排序、跨节移动
 - **A/B 卷**：同一份蓝图换个种子再出一套，自动避开原卷用过的题
+- **导出** md / html / docx / pdf，三种版面（学生卷 / 带答案 / 答案卷）、
+  三套预设模板，Word 里的公式是原生可编辑的
 - **图形界面**：课程章节树、题目列表与筛选、七种题型的结构化编辑器、导入向导、
-  组卷与试卷编辑
+  组卷、试卷编辑与导出
 - **修改历史与回滚**、回收站、标签合并、孤儿图片清理、环境自检
 
 **还没做**：
 
-- 导出 md / html / docx / pdf（试卷目前只能在界面里看）
 - `.qbz` 整库交换包
 - 桌面外壳（pywebview）与打包分发
 
@@ -65,11 +66,13 @@ qbank import "数据结构" docs/examples/导入模板示例.md
 qbank question list --course 数据结构 -s 最短路径
 ```
 
-出一份卷：
+出一份卷，再印出来：
 
 ```bash
 qbank paper assemble "数据结构" docs/examples/组卷蓝图示例.yaml --dry-run   # 先看抽题结果
 qbank paper assemble "数据结构" docs/examples/组卷蓝图示例.yaml
+qbank paper export <试卷id前8位> -f pdf -f docx        # 学生卷
+qbank paper export <试卷id前8位> -f pdf -l answers     # 答案与评分标准
 ```
 
 或者直接用图形界面：
@@ -94,6 +97,7 @@ qbank serve
   补上几道
 - **试卷编辑**：分节、逐题或整节配分、上下移、跨节移动、移出；可切「带答案 /
   学生视角」逐题核对；一键再出一套不重题的 B 卷
+- **导出**：选格式、版面与模板，点一下就下载；Markdown 的旁挂图片会自动打成 zip
 - **修改历史**：每次保存前自动存一份快照，可回滚；回滚本身也会留痕
 - **标签管理**：合并同义标签（「循环」「循环结构」「while循环」）
 - **状态与自检**：能力检查、题库规模、索引是否过期、孤儿图片清理
@@ -143,18 +147,20 @@ qbank batch rollback <批次id前8位>
 | 命令 | 作用 |
 |---|---|
 | `qbank doctor` | 环境自检：存储、中文检索、pandoc、PDF、Web |
+| `qbank formats` | 支持的导入格式及依赖状态 |
 | `qbank serve` | 启动图形界面 |
 | `qbank info` | 题库位置与规模 |
 | `qbank course add / list / rm` | 课程 |
 | `qbank chapter add / list` | 章节树与每节题量 |
 | `qbank import <课程> <文件>` | 批量导入（见上） |
-| `qbank formats` | 支持的导入格式及依赖状态 |
 | `qbank batch list / rollback` | 导入历史与整批撤销 |
 | `qbank paper assemble <课程> <蓝图>` | 按蓝图自动组卷（`--dry-run` 先看） |
 | `qbank paper list / show` | 试卷列表与卷面（`--answers` 带答案） |
 | `qbank paper new / add` | 手工建卷与加题 |
 | `qbank paper variant <id>` | 照同一蓝图再出一套，避开原卷用过的题 |
 | `qbank paper rm <id>` | 删除试卷（默认进回收站） |
+| `qbank paper export <id> -f pdf` | 导出 md/html/docx/pdf，`-l` 选版面 |
+| `qbank paper templates` | 列出导出模板，`--copy` 拷一套出来改 |
 | `qbank question list --type/--difficulty/--tag/-s` | 筛选与全文检索 |
 | `qbank question show <id>` | 查看一道题（`--yaml` 可导出后再导入） |
 | `qbank question add <课程> <文件>` | 从 YAML/JSON 录入，面向脚本化 |
@@ -202,11 +208,49 @@ sections:
 完整字段见 **[组卷蓝图规范](docs/组卷蓝图规范.md)**，示例在
 [`docs/examples/组卷蓝图示例.yaml`](docs/examples/组卷蓝图示例.yaml)。
 
+## 导出
+
+四种格式，三种版面，三套预设模板：
+
+```bash
+qbank paper export <id> -f pdf                    # 学生卷
+qbank paper export <id> -f pdf -l full            # 题目 + 答案（教师用）
+qbank paper export <id> -f pdf -l answers         # 只有答案与评分标准
+qbank paper export <id> -f md -f docx -o ~/卷子/  # 一次多种格式
+qbank paper export <id> -f pdf -t exam            # 换一套模板
+```
+
+| 格式 | 特点 |
+|---|---|
+| **md** | 图片旁挂成一个目录，正文是相对路径。可提交进 git、可再加工 |
+| **html** | **单文件**：图片内联、公式用 MathML，断网也能打开，直接发给学生 |
+| **docx** | 公式是 Word **原生可编辑**的，合并单元格的表格完整保留 |
+| **pdf** | 无头浏览器打印，所见即所得，自动带页码 |
+
+| 模板 | 用途 |
+|---|---|
+| `standard` | A4 单栏，卷头含考试信息与班级/姓名/学号栏 |
+| `exam` | 正式考试卷：密封线、得分栏、考场座位号 |
+| `compact` | 练习卷：选项分栏，同样题量少用一半纸 |
+
+要点：
+
+- **导出的是成卷时冻结的题面**。题库里后来改了题、删了题，去年的卷子不受影响
+- **学生卷里不会出现答案**——这条有专门的测试守着
+- **选项乱序后答案自动跟着换**；答案里写了别的内容时保持原样，留给人核对
+- 同一份卷导出两次**字节一致**（docx 除外，pandoc 会写时间戳），方便 diff 对比
+- PDF 需要一个浏览器内核：`playwright install chromium`，**或者系统里已经装了
+  Google Chrome / Edge** 即可（会自动找）。都没有时仍可导出 HTML 自行打印
+
+改模板：`qbank paper templates --copy standard --as 我的`，改完用
+`-t 我的` 导出。详见 **[导出模板制作指南](docs/导出模板制作指南.md)**。
+
 ## 文档
 
 - [设计说明](docs/设计说明.md) —— 为什么这样做，以及被实测推翻过的设计
 - [导入模板规范](docs/导入模板规范.md) —— 批量导入前先读这篇
 - [组卷蓝图规范](docs/组卷蓝图规范.md) —— 蓝图的完整字段
+- [导出模板制作指南](docs/导出模板制作指南.md) —— 改版面、做自己的模板
 
 ## 开发
 

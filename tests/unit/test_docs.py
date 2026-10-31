@@ -28,6 +28,7 @@ SPEC = ROOT / "docs" / "导入模板规范.md"
 DESIGN = ROOT / "docs" / "设计说明.md"
 BLUEPRINT_SPEC = ROOT / "docs" / "组卷蓝图规范.md"
 BLUEPRINT_EXAMPLE = ROOT / "docs" / "examples" / "组卷蓝图示例.yaml"
+TEMPLATE_GUIDE = ROOT / "docs" / "导出模板制作指南.md"
 
 #: 需要检查的全部文档
 DOCS = [
@@ -35,6 +36,7 @@ DOCS = [
     SPEC,
     DESIGN,
     BLUEPRINT_SPEC,
+    TEMPLATE_GUIDE,
     ROOT / "docs" / "examples" / "导入模板示例.md",
 ]
 
@@ -216,10 +218,8 @@ def test_readme_pending_list_tracks_the_code() -> None:
 
     exporters = ROOT / "src" / "qbank" / "exchange" / "exporters"
     has_exporters = any(p.stem != "__init__" for p in exporters.glob("*.py"))
-    if has_exporters:
-        assert "导出" not in pending, "导出已经实现了，从「还没做」里删掉"
-    else:
-        assert "导出" in pending, "导出还没实现，应列在「还没做」里"
+    assert has_exporters, "导出模块没了？那 README 的说法也要跟着改"
+    assert "导出" not in pending, "导出已经实现了，不该还列在「还没做」里"
 
 
 @pytest.mark.parametrize("feature", ["组卷", "试卷", "蓝图"])
@@ -366,3 +366,98 @@ def test_quoted_shortage_report_matches_the_real_wording() -> None:
     for fragment in ("只排进", "库内符合条件的只有", "是同一批题", "不够几节分"):
         assert fragment in alone + together
         assert fragment in text, f"规范里的报告示例与实际用词不符，缺「{fragment}」"
+
+
+# ---------------------------------------------- 导出模板制作指南
+def test_documented_template_files_are_the_real_ones() -> None:
+    """指南里写的文件名要和代码里找的那几个一致。"""
+    from qbank.exchange.exporters.templates import (
+        DESCRIPTION,
+        HTML_TEMPLATE,
+        MD_TEMPLATE,
+        REFERENCE_DOCX,
+    )
+
+    text = TEMPLATE_GUIDE.read_text("utf-8")
+    for name in (MD_TEMPLATE, HTML_TEMPLATE, REFERENCE_DOCX, DESCRIPTION):
+        assert f"`{name}`" in text, f"指南里没写 {name}"
+
+
+def test_documented_context_fields_exist() -> None:
+    """指南里列的上下文字段必须真的能在模板里取到。
+
+    这张表是模板作者唯一的参考；列了一个不存在的字段，他写出来的模板会在
+    StrictUndefined 下当场炸掉。
+    """
+    from qbank.exchange.exporters.context import ItemContext, PaperContext, SectionContext
+
+    text = TEMPLATE_GUIDE.read_text("utf-8")
+    owners = {"paper": PaperContext, "section": SectionContext, "item": ItemContext}
+    checked = 0
+    for owner, field in re.findall(r"`(paper|section|item)\.([a-z_]+)`", text):
+        target = owners[owner]
+        names = set(getattr(target, "__annotations__", {})) | set(dir(target))
+        assert field in names, f"指南里写了 {owner}.{field}，但 {target.__name__} 上没有"
+        checked += 1
+    assert checked >= 20, f"只检查了 {checked} 个字段，抽取逻辑可能失效了"
+
+
+def test_documented_filters_exist() -> None:
+    """指南里列的三个过滤器要真的注册了。"""
+    from qbank.exchange.exporters.templates import (
+        BUILTIN_DIR,
+        ExportFormat,
+        PaperTemplate,
+        make_environment,
+    )
+
+    template = PaperTemplate(key="standard", directory=BUILTIN_DIR / "standard", builtin=True)
+    environment = make_environment(template, ExportFormat.HTML)
+    text = TEMPLATE_GUIDE.read_text("utf-8")
+    for name in ("md", "g", "cn"):
+        assert name in environment.filters, f"指南里写了 | {name} 过滤器，但没注册"
+        assert f"| `{name}` |" in text
+
+
+def test_documented_template_blocks_exist() -> None:
+    """指南里说可以 override 的块，内置模板里要真的有。"""
+    html = (
+        ROOT / "src" / "qbank" / "templates" / "paper" / "standard" / "paper.html.j2"
+    ).read_text("utf-8")
+    markdown = (
+        ROOT / "src" / "qbank" / "templates" / "paper" / "standard" / "paper.md.j2"
+    ).read_text("utf-8")
+    for block in (
+        "page_size",
+        "page_margin",
+        "body_size",
+        "print_size",
+        "title_size",
+        "styles",
+        "extra_styles",
+        "header",
+        "body",
+        "answer_key",
+    ):
+        assert f"{{% block {block} %}}" in html, f"html 模板里没有 {block} 块"
+    for block in ("header", "body", "answer_key"):
+        assert f"{{% block {block} %}}" in markdown, f"md 模板里没有 {block} 块"
+
+
+def test_preset_templates_match_the_readme() -> None:
+    """README 列的三套模板要和内置的对得上。"""
+    from qbank.exchange.exporters.templates import discover
+
+    builtin = {key for key, item in discover().items() if item.builtin}
+    assert builtin == {"standard", "exam", "compact"}
+    table = README.read_text("utf-8").split("## 导出")[1]
+    for key in builtin:
+        assert f"`{key}`" in table, f"README 的模板表里没有 {key}"
+
+
+def test_documented_export_formats_match_the_enum() -> None:
+    from qbank.exchange.exporters.templates import ExportFormat
+
+    table = README.read_text("utf-8").split("## 导出")[1].split("| 模板 |")[0]
+    for fmt in ExportFormat:
+        assert f"**{fmt.value}**" in table, f"README 的格式表里没有 {fmt.value}"

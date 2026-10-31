@@ -45,17 +45,17 @@ class Paths:
 
     @property
     def templates_dir(self) -> Path:
-        """用户自定义导出模板的存放位置。导出功能尚未实现，目录先占住。"""
+        """用户自定义导出模板。这里的同名模板会覆盖内置的那一套。"""
         return self.root / "templates"
 
     @property
     def exports_dir(self) -> Path:
-        """默认导出目录。导出功能尚未实现。"""
+        """默认导出目录。命令行与界面导出都落在这里。"""
         return self.root / "exports"
 
     @property
     def backups_dir(self) -> Path:
-        """``.qbz`` 交换包与自动备份的存放位置。两者都尚未实现。"""
+        """``.qbz`` 交换包与自动备份的存放位置。两者都尚未实现，目录先占住。"""
         return self.root / "backups"
 
     @property

@@ -303,11 +303,53 @@ def _fix_inline_display_math(html: str) -> str:
 _ASSET_URL = re.compile(rf"{re.escape(ASSET_SCHEME)}(?P<sha>[0-9a-fA-F]{{4,64}})")
 
 
+#: Markdown 图片语法里引用 asset:// 的整条引用（导出时要连 alt 一起重写）
+_MARKDOWN_ASSET_IMAGE = re.compile(
+    rf"!\[(?P<alt>[^\]]*)\]\((?P<src>{re.escape(ASSET_SCHEME)}[0-9a-fA-F]{{4,64}})\)"
+)
+
+
 #: 整个引用了 asset:// 的 ``<img>`` 标签
 _ASSET_IMG_TAG = re.compile(
     rf"<img\b[^>]*?{re.escape(ASSET_SCHEME)}(?P<sha>[0-9a-fA-F]{{4,64}})[^>]*?>",
     re.IGNORECASE,
 )
+
+
+def rewrite_asset_links(text: str, resolver: AssetResolver, *, missing: str = "") -> str:
+    """把 Markdown/HTML **原文**里的 ``asset://`` 换成目标形式。
+
+    这是给导出用的：md 导出要换成相对路径、docx 要换成绝对路径（pandoc 才找得到
+    图）、自包含 HTML 要换成 ``data:`` 内联。渲染期的解析器只对「渲染成 HTML」
+    这条路有用，而 md 与 docx 都不经过渲染。
+
+    ``resolver`` 返回 ``None``（图找不到）时整条引用换成 ``missing`` 文本——
+    留一个指向 ``asset://`` 的死链接，在 Word 里会变成一个找不到文件的红叉，
+    而用户看不出那原本是一张图。
+
+    >>> rewrite_asset_links("![图](asset://abcd)", lambda sha: f"img/{sha}.png")
+    '![图](img/abcd.png)'
+    >>> rewrite_asset_links("![图](asset://abcd)", lambda _: None, missing="［图片缺失］")
+    '［图片缺失］'
+    """
+
+    def replace_markdown(match: re.Match[str]) -> str:
+        sha = match.group("src")[len(ASSET_SCHEME) :]
+        target = resolver(sha)
+        if target is None:
+            return missing
+        return f"![{match.group('alt')}]({target})"
+
+    def replace_tag(match: re.Match[str]) -> str:
+        sha = match.group("sha")
+        return match.group(0) if resolver(sha) is not None else missing
+
+    def replace_url(match: re.Match[str]) -> str:
+        return resolver(match.group("sha")) or ""
+
+    text = _MARKDOWN_ASSET_IMAGE.sub(replace_markdown, text)
+    text = _ASSET_IMG_TAG.sub(replace_tag, text)
+    return _ASSET_URL.sub(replace_url, text)
 
 
 def _resolve_asset_urls(html: str, options: RenderOptions) -> str:

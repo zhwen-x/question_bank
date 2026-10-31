@@ -1,0 +1,136 @@
+{#- 标准试卷 · Markdown。
+    docx 导出也走这一份：pandoc 把它转成 Word，所以这里的题号与配分就是
+    Word 版的题号与配分，两边不会打架。
+
+    选项用行尾反斜杠做硬换行（GFM 与 pandoc 都认），这样四个选项是一段里的
+    四行，而不是四个段落——四个段落在 Word 里会被撑得很开，不像卷子。 -#}
+{% block header %}
+# {{ paper.title }}
+
+{% if paper.meta %}
+{% for key, value in paper.meta.items() %}{{ key }}：{{ value }}{{ "　" if not loop.last }}{% endfor %}
+
+{% endif %}
+满分 {{ paper.total_score | g }} 分　共 {{ paper.question_count }} 题{% if paper.layout.value != "paper" %}　{{ paper.layout.label }}{% endif %}
+
+{% if paper.missing_assets %}
+> ⚠ 有 {{ paper.missing_assets }} 张图片未找到，正文中已用提示文字代替。
+
+{% endif %}
+
+---
+{% endblock %}
+
+{% macro options(item) %}
+{% for option in item.options %}
+{{ option.label }}．{{ option.content }}{{ "\\" if not loop.last }}
+{% endfor %}
+{% endmacro %}
+{% macro programming(block) %}
+{% if block.language %}
+
+语言：{{ block.language }}
+{% endif %}
+{% if block.function_signature %}
+
+```
+{{ block.function_signature }}
+```
+{% endif %}
+{% if block.starter_code %}
+
+```{{ block.language }}
+{{ block.starter_code }}
+```
+{% endif %}
+{% for case in block.test_cases %}
+
+样例{{ loop.index }}　输入：`{{ case.input }}`　输出：`{{ case.expected }}`
+{% endfor %}
+{% endmacro %}
+{% macro question(item) %}
+**{{ item.number }}．**（{{ item.score | g }} 分）{{ item.stem }}
+{% if item.options %}
+
+{{ options(item) | trim }}
+{% endif %}
+{% if item.programming %}
+{{ programming(item.programming) }}
+{% endif %}
+{% for sub in item.sub_questions %}
+
+**{{ sub.label }}**（{{ sub.score | g }} 分）{{ sub.stem }}
+{% if paper.show_answers and sub.answer %}
+
+> 答案：{{ sub.answer }}
+{% endif %}
+{% if paper.show_answers and sub.rubric %}
+
+> 评分：{{ sub.rubric }}
+{% endif %}
+{% endfor %}
+{% if paper.show_answers and item.answer %}
+
+> **答案：**{{ item.answer }}
+{% endif %}
+{% if paper.show_answers and item.explanation %}
+
+> **解析：**{{ item.explanation }}
+{% endif %}
+{% if paper.show_answers and item.rubric %}
+
+> **评分标准：**{{ item.rubric }}
+{% endif %}
+{% endmacro %}
+{% block body %}
+{% if paper.show_questions %}
+{% for section in paper.sections %}
+## {{ section.title }}
+
+{% if section.instructions %}
+{{ section.instructions }}
+
+{% endif %}
+{% for item in section.items %}
+{{ question(item) | trim }}
+
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endblock %}
+
+{% block answer_key %}
+{% if paper.layout.value == "answers" %}
+{% for section in paper.sections %}
+## {{ section.title }}
+
+{% if section.objective_items %}
+{% for item in section.objective_items %}
+{{ item.number }}．{{ item.compact_answer }}{{ "　" if not loop.last }}
+{%- endfor %}
+
+
+{% endif %}
+{% for item in section.subjective_items %}
+**{{ item.number }}．**（{{ item.score | g }} 分）
+{% if item.answer %}
+
+{{ item.answer }}
+{% endif %}
+{% for sub in item.sub_questions %}
+
+**{{ sub.label }}**（{{ sub.score | g }} 分）{{ sub.answer }}
+{% if sub.rubric %}
+
+评分：{{ sub.rubric }}
+{% endif %}
+{% endfor %}
+{% if item.rubric %}
+
+评分标准：{{ item.rubric }}
+{% endif %}
+
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% endblock %}

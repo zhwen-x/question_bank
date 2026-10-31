@@ -539,3 +539,76 @@ def test_manual_paper_add_and_remove(paper_bank: Path) -> None:
 
     assert "已移入回收站" in run("paper", "rm", paper_id)
     assert "还没有试卷" in run("paper", "list")
+
+
+# ===================================================================== 导出
+@pytest.fixture
+def exported_paper(paper_bank: Path) -> str:
+    run("paper", "assemble", "数据结构", str(paper_bank), "--seed", "7")
+    return str(run("paper", "list").split()[0])
+
+
+def test_export_templates_lists_the_presets(paper_bank: Path) -> None:
+    output = run("paper", "templates")
+    for key in ("standard", "exam", "compact"):
+        assert key in output
+    assert "内置" in output
+
+
+def test_export_markdown_and_html(exported_paper: str, tmp_path: Path) -> None:
+    target = tmp_path / "out"
+    output = run("paper", "export", exported_paper, "-f", "md", "-f", "html", "-o", str(target))
+    assert "Markdown" in output
+    assert "HTML" in output
+    written = sorted(path.suffix for path in target.iterdir())
+    assert written == [".html", ".md"]
+
+
+def test_export_answer_key(exported_paper: str, tmp_path: Path) -> None:
+    target = tmp_path / "答案.md"
+    run("paper", "export", exported_paper, "-f", "md", "-l", "answers", "-o", str(target))
+    text = target.read_text("utf-8")
+    assert "答案与评分标准" in text
+    assert "1．" in text
+
+
+def test_export_rejects_unknown_format(exported_paper: str) -> None:
+    result = runner.invoke(app, ["paper", "export", exported_paper, "-f", "epub"])
+    assert result.exit_code == 1
+    assert "不认识的格式" in result.output
+    assert "pdf" in result.output, "要告诉用户有哪些可选"
+
+
+def test_export_rejects_unknown_layout(exported_paper: str) -> None:
+    result = runner.invoke(app, ["paper", "export", exported_paper, "-l", "答案卷"])
+    assert result.exit_code == 1
+    assert "--layout" in result.output
+
+
+def test_export_unknown_template_lists_the_real_ones(exported_paper: str, tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "paper",
+            "export",
+            exported_paper,
+            "-f",
+            "md",
+            "-t",
+            "没这套",
+            "-o",
+            str(tmp_path / "x.md"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "standard" in result.output
+
+
+def test_copy_template_for_editing(paper_bank: Path) -> None:
+    output = run("paper", "templates", "--copy", "standard", "--as", "我的")
+    assert "已拷到" in output
+    assert "我的" in run("paper", "templates")
+
+    again = runner.invoke(app, ["paper", "templates", "--copy", "standard", "--as", "我的"])
+    assert again.exit_code == 1
+    assert "已存在" in again.output

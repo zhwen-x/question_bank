@@ -37,6 +37,20 @@ from qbank.core.services.paper import (
 from qbank.core.services.question import QuestionService
 from qbank.core.services.selection import BlueprintError, SelectionResult
 from qbank.doctor import Level, Status, run_checks
+from qbank.exchange.export_service import (
+    ExportService,
+    available_formats,
+    default_filename,
+)
+from qbank.exchange.exporters.context import Layout
+from qbank.exchange.exporters.pdf import PdfUnavailableError
+from qbank.exchange.exporters.templates import (
+    DEFAULT_TEMPLATE,
+    ExportFormat,
+    TemplateNotFoundError,
+    copy_for_editing,
+    discover,
+)
 from qbank.exchange.import_service import ImportService, plan_file
 from qbank.exchange.importers.loader import SUPPORTED_SUFFIXES, UnsupportedSourceError
 from qbank.exchange.pandoc import PandocConversionError, PandocUnavailableError
@@ -1322,3 +1336,124 @@ def paper_remove(
             )
     finally:
         context.close()
+
+
+@paper_app.command("export")
+def paper_export(
+    paper_id: Annotated[str, typer.Argument(help="试卷 id（可用前 8 位）")],
+    formats: Annotated[
+        list[str] | None,
+        typer.Option("--format", "-f", help="md / html / docx / pdf，可多次指定"),
+    ] = None,
+    layout: Annotated[
+        str, typer.Option("--layout", "-l", help="paper 只有题目 / full 带答案 / answers 答案卷")
+    ] = "paper",
+    template: Annotated[str, typer.Option("--template", "-t", help="模板名")] = DEFAULT_TEMPLATE,
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="输出文件；多个格式时视为目录")
+    ] = None,
+) -> None:
+    """导出试卷。
+
+    导出的是**成卷时冻结的题面**，不是题库里的当前版本——去年的卷子导出来就是
+    去年那张。
+
+    四种格式：md（图片旁挂成一个目录）、html（单文件，图片内联，断网能看）、
+    docx（公式是 Word 原生可编辑的）、pdf（无头浏览器打印）。
+    """
+    try:
+        chosen = [ExportFormat(name.lower().lstrip(".")) for name in (formats or ["pdf"])]
+    except ValueError as exc:
+        names = "、".join(f.value for f in ExportFormat)
+        typer.secho(f"不认识的格式；可选：{names}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        wanted = Layout(layout.lower())
+    except ValueError as exc:
+        typer.secho(
+            "--layout 只能是 paper（只有题目）、full（带答案）或 answers（答案卷）",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    capabilities = available_formats()
+    blocked = [fmt for fmt in chosen if not capabilities[fmt][0]]
+    if blocked:
+        for fmt in blocked:
+            typer.secho(
+                f"导不了 {fmt.label}：{capabilities[fmt][1]}", fg=typer.colors.RED, err=True
+            )
+        raise typer.Exit(code=1)
+
+    context = _open()
+    try:
+        with context.session() as session:
+            paper = _find_paper(session, paper_id)
+            service = ExportService(session, context.paths)
+            written: list[str] = []
+            for fmt in chosen:
+                target = _export_target(output, len(chosen), paper, fmt, wanted)
+                try:
+                    result = service.export(
+                        paper, fmt, layout=wanted, template=template, output=target
+                    )
+                except (TemplateNotFoundError, PandocConversionError, PdfUnavailableError) as exc:
+                    typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                    raise typer.Exit(code=1) from exc
+                written.append(f"{result.path}")
+                extra = (
+                    f"（另有 {len(result.extra_files)} 个图片文件）" if result.extra_files else ""
+                )
+                typer.secho(f"✓ {result.summary}{extra}", fg=typer.colors.GREEN)
+                if result.assets.missing:
+                    typer.secho(
+                        f"  注意：{len(result.assets.missing)} 张图片未找到，已用提示文字代替",
+                        fg=typer.colors.YELLOW,
+                    )
+        for line in written:
+            typer.echo(line)
+    finally:
+        context.close()
+
+
+def _export_target(
+    output: Path | None, count: int, paper: Any, fmt: ExportFormat, layout: Layout
+) -> Path | None:
+    """算出这一个格式写到哪。
+
+    指定了 ``--output`` 又要多个格式时，把它当目录——否则第二个格式会把第一个
+    覆盖掉，而用户只会看到最后那个文件。
+    """
+    if output is None:
+        return None
+    if count == 1 and output.suffix:
+        return output
+    return output / default_filename(paper, fmt, layout)
+
+
+@paper_app.command("templates")
+def paper_templates(
+    copy: Annotated[str, typer.Option("--copy", help="把某套模板拷到数据目录供修改")] = "",
+    name: Annotated[str, typer.Option("--as", help="拷贝后的新名字")] = "",
+) -> None:
+    """列出导出模板，或拷一套出来改。"""
+    if copy:
+        try:
+            target = copy_for_editing(copy, new_key=name)
+        except (TemplateNotFoundError, FileExistsError) as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        typer.secho(f"已拷到 {target}", fg=typer.colors.GREEN)
+        typer.echo("改完直接用 --template " + (name or copy) + " 导出；同名模板会覆盖内置的那套。")
+        return
+
+    found = discover()
+    if not found:
+        typer.echo("没有可用模板。")
+        return
+    for key, item in sorted(found.items()):
+        formats = "、".join(fmt.value for fmt in item.formats)
+        typer.secho(f"{key:12} [{item.origin}] {formats}", bold=True)
+        if item.description:
+            typer.echo(f"             {item.description}")

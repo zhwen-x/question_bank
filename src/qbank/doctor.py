@@ -191,43 +191,38 @@ def _check_pandoc() -> Check:
 
 
 def _check_pdf() -> Check:
+    """PDF 导出能力。
+
+    不只看 playwright 装没装：自带内核要单独下载约 130MB，而且**不是所有平台
+    都有**（macOS 12 上 ``playwright install chromium`` 直接报不支持）。所以
+    实际能力由 :func:`qbank.exchange.exporters.pdf.capability` 真的启一次浏览器
+    来判断，系统装的 Chrome / Edge 同样算数。
+    """
+    from qbank.exchange.exporters import pdf
+
+    found = pdf.capability()
+    if found.available:
+        return Check(
+            name="PDF 导出",
+            level=Level.OPTIONAL,
+            status=Status.OK,
+            detail=f"可用，用的是{found.detail}",
+        )
     if importlib.util.find_spec("playwright") is None:
         return Check(
-            name="PDF 渲染依赖",
+            name="PDF 导出",
             level=Level.OPTIONAL,
             status=Status.MISSING,
-            detail="playwright 未安装（导出功能本身尚未实现）",
-            remedy='导出上线后需要它；可提前装：pip install "qbank[pdf]"'
-            " 再执行 playwright install chromium",
-        )
-    from playwright.sync_api import sync_playwright
-
-    try:
-        with sync_playwright() as pw:
-            executable = pw.chromium.executable_path
-    except Exception as exc:
-        return Check(
-            name="PDF 渲染依赖",
-            level=Level.OPTIONAL,
-            status=Status.DEGRADED,
-            detail=f"playwright 已装但 Chromium 不可用：{exc}",
-            remedy="playwright install chromium（导出功能本身尚未实现）",
-        )
-    from pathlib import Path
-
-    if not Path(executable).exists():
-        return Check(
-            name="PDF 渲染依赖",
-            level=Level.OPTIONAL,
-            status=Status.DEGRADED,
-            detail="Chromium 内核尚未下载（导出功能本身尚未实现）",
-            remedy="导出上线后需要它；可提前执行 playwright install chromium（约 130MB）",
+            detail="未安装 playwright；其他三种格式不受影响",
+            remedy='pip install "qbank[pdf]"，再装内核或用系统已有的 Chrome',
         )
     return Check(
-        name="PDF 渲染依赖",
+        name="PDF 导出",
         level=Level.OPTIONAL,
-        status=Status.OK,
-        detail="Playwright + Chromium 可用（导出功能尚未实现，依赖已就位）",
+        status=Status.DEGRADED,
+        detail=found.detail,
+        remedy="playwright install chromium（约 130MB），或装一个 Google Chrome；"
+        "在此之前可导出 HTML 后用浏览器打印",
     )
 
 

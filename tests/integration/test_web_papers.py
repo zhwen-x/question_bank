@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -546,3 +547,89 @@ def test_deleting_a_course_warns_that_papers_go_too(
         f"/courses/{bank}/delete", data={"confirm_name": "数据结构"}, follow_redirects=True
     )
     assert "全部题目与 1 份试卷" in text_of(deleted.text)
+
+
+# ------------------------------------------------------------ 导出
+def test_export_panel_lists_formats_and_templates(client: TestClient, paper_id: str) -> None:
+    body = text_of(client.get(f"/papers/{paper_id}").text)
+    assert "导出并下载" in body
+    for label in ("Markdown", "HTML", "Word", "PDF"):
+        assert label in body
+    assert "standard" in body
+    assert "答案与评分标准" in body, "三种版面都要能选"
+
+
+def test_export_html_downloads_a_single_file(client: TestClient, paper_id: str) -> None:
+    response = client.get(f"/papers/{paper_id}/export", params={"fmt": "html"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "attachment" in response.headers.get("content-disposition", "")
+    assert "<math" in response.text or "单项选择题" in response.text
+
+
+def test_export_markdown_without_images_is_plain_md(client: TestClient, paper_id: str) -> None:
+    response = client.get(f"/papers/{paper_id}/export", params={"fmt": "md"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+
+
+def test_export_markdown_with_images_comes_back_zipped(
+    client: TestClient, bank: str, session: Session, isolate_data_dir: Any
+) -> None:
+    """浏览器只能下一个文件。旁挂的图片不打包的话，用户拿到的是一堆坏引用。"""
+    import io
+    import zipfile
+
+    from PIL import Image
+
+    from qbank.core.services.asset import AssetService
+    from qbank.core.services.paper import PaperService
+    from qbank.core.services.question import QuestionService
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (30, 20), (10, 10, 10)).save(buffer, format="PNG")
+    asset, _ = AssetService(session, isolate_data_dir).store_bytes(buffer.getvalue())
+    question = QuestionService(session).create(
+        bank,
+        QuestionDraft.model_validate(
+            {
+                "type": "short_answer",
+                "stem": f"看图：![图](asset://{asset.sha256})",
+                "payload": {"type": "short_answer"},
+                "status": "active",
+            }
+        ),
+    )
+    papers = PaperService(session)
+    paper = papers.create_empty(bank, "带图的卷", sections=["一"])
+    papers.add_questions(paper.id, paper.sections[0].id, [question.id], score=5)
+    session.commit()
+
+    response = client.get(f"/papers/{paper.id}/export", params={"fmt": "md"})
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = archive.namelist()
+    assert any(name.endswith(".md") for name in names)
+    assert any(".assets/" in name for name in names), "图片要一起打包"
+
+
+def test_export_with_a_bad_format_says_so(client: TestClient, paper_id: str) -> None:
+    response = client.get(
+        f"/papers/{paper_id}/export", params={"fmt": "epub"}, follow_redirects=True
+    )
+    assert "不认识的导出格式" in text_of(response.text)
+
+
+def test_export_with_an_unknown_template_says_so(client: TestClient, paper_id: str) -> None:
+    response = client.get(
+        f"/papers/{paper_id}/export",
+        params={"fmt": "md", "template": "没这套"},
+        follow_redirects=True,
+    )
+    assert "没这套" in text_of(response.text)
+    assert "standard" in text_of(response.text)
+
+
+def test_export_of_a_missing_paper_is_404(client: TestClient) -> None:
+    assert client.get("/papers/不存在/export").status_code == 404

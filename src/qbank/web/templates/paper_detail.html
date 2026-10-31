@@ -68,6 +68,52 @@
   </form>
 </details>
 
+<details class="card" open>
+  <summary><strong>导出</strong></summary>
+  <p class="hint" style="margin-top:8px">
+    导出的是<strong>成卷时冻结的题面</strong>，题库里后来改了什么都不影响这份卷子。
+    文件会同时留一份在数据目录的 <code>exports/</code> 里。
+  </p>
+  <form method="get" action="/papers/{{ paper.id }}/export" class="field-row"
+        style="align-items:flex-end">
+    <div class="field">
+      <label for="x-fmt">格式</label>
+      <select id="x-fmt" name="fmt">
+        {% for fmt, usable, reason in export_formats %}
+          <option value="{{ fmt.value }}" {% if not usable %}disabled{% endif %}>
+            {{ fmt.label }}{% if not usable %}（{{ reason }}）{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="x-layout">内容</label>
+      <select id="x-layout" name="layout">
+        {% for value, label in export_layouts %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="x-tpl">模板</label>
+      <select id="x-tpl" name="template">
+        {% for key, item in export_templates %}
+          <option value="{{ key }}" {% if key == paper.template_key %}selected{% endif %}>
+            {{ key }}{% if item.description %} · {{ item.description }}{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field" style="flex:0">
+      <button type="submit" class="btn btn-primary">导出并下载</button>
+    </div>
+  </form>
+  <p class="hint">
+    Markdown 的图片是旁挂的，下载时会自动打成 zip。
+    HTML 是单文件（图片内联、公式用 MathML），断网也能打开。
+  </p>
+</details>
+
 {% if paper.blueprint %}
 <details class="card">
   <summary><strong>再出一套（A/B 卷）</strong></summary>

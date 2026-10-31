@@ -1,0 +1,30 @@
+{#- 正式考试卷 · Markdown。密封线、得分栏这些只在 HTML/PDF 里有意义
+    （Markdown 没有版面概念），所以这里加的是一张得分表——它在 Word 里是
+    真表格，印出来可以直接用。 -#}
+{% extends "standard/paper.md.j2" %}
+
+{% block header %}
+# {{ paper.title }}
+
+{% if paper.meta %}
+{% for key, value in paper.meta.items() %}{{ key }}：{{ value }}{{ "　" if not loop.last }}{% endfor %}
+
+{% endif %}
+满分 {{ paper.total_score | g }} 分　共 {{ paper.question_count }} 题{% if paper.layout.value != "paper" %}　{{ paper.layout.label }}{% endif %}
+
+{% if paper.layout.value == "paper" %}
+
+院系 ________　班级 ________　姓名 ________　学号 ________　考场 ____　座位号 ____
+
+| 题号 | {% for section in paper.sections %}{{ section.number | cn }} | {% endfor %}总分 |
+|---|{% for section in paper.sections %}---|{% endfor %}---|
+| 满分 | {% for section in paper.sections %}{{ section.total_score | g }} | {% endfor %}{{ paper.total_score | g }} |
+| 得分 | {% for section in paper.sections %}　| {% endfor %}　|
+{% endif %}
+{% if paper.missing_assets %}
+
+> ⚠ 有 {{ paper.missing_assets }} 张图片未找到，正文中已用提示文字代替。
+{% endif %}
+
+---
+{% endblock %}

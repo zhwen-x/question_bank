@@ -43,9 +43,9 @@ jobs:
       - name: Toolchain doctor
         run: python -m qbank.cli doctor
 
-      # 保留 -m "not pdf"：导出功能（M5）上线后，PDF 相关测试需要 Chromium
-      # 内核，届时再加回「只在 Linux 上装 chromium 并跑 pytest -m pdf」两步。
-      # 现在还没有任何测试带 pdf 标记，贸然跑 `pytest -m pdf` 会因「未选中任何
-      # 测试」退出码 5 而让 CI 变红。
+      # 不再排除 pdf 标记：PDF 导出会先找 Playwright 自带内核，再找系统装的
+      # Chrome / Edge，而三平台的 GitHub runner 都预装了 Chrome。找不到任何
+      # 内核时相关用例自己 skip，不会让 CI 变红——所以这里直接全量跑，白得一份
+      # 「PDF 到底能不能出来」的覆盖。
       - name: Test
-        run: pytest -m "not pdf" --cov --cov-report=term-missing
+        run: pytest --cov --cov-report=term-missing

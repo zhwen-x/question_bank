@@ -1,0 +1,26 @@
+{#- 练习卷：选项分栏、行距收紧、字号略小。同样的题量少用一半纸。
+    不适合正式考试——主观题没有留答题空白。 -#}
+{% extends "standard/paper.html.j2" %}
+
+{% block body_size %}10.5pt{% endblock %}
+{% block print_size %}10pt{% endblock %}
+{% block title_size %}15pt{% endblock %}
+{% block page_margin %}14mm 12mm{% endblock %}
+
+{% block extra_styles %}
+body { line-height: 1.5; }
+.item { margin-bottom: 7px; }
+.section { margin-top: 13px; }
+
+/* 选项分栏。短选项一行挤四个，长选项自动退回少的列数 */
+.options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11em, 1fr));
+  gap: 0 14px;
+}
+.options li { break-inside: avoid; }
+
+.sub { margin-left: 1.2em; }
+.answer, .rubric, .explain { margin-left: 1.2em; font-size: 9.5pt; }
+.student-row { display: none; }
+{% endblock %}

@@ -27,6 +27,7 @@ MODULES = [
     "qbank.core.blueprint",
     "qbank.core.services.selection",
     "qbank.core.services.paper",
+    "qbank.exchange.exporters.context",
 ]
 
 

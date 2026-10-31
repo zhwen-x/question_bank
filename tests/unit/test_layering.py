@@ -74,3 +74,20 @@ def test_core_is_importable_without_optional_deps() -> None:
 
     for module in ("qbank.config", "qbank.core.content.segment"):
         importlib.import_module(module)
+
+
+def test_builtin_templates_live_inside_the_package() -> None:
+    """内置导出模板必须在 ``qbank`` 包目录里，否则打进 wheel 的时候会漏掉。
+
+    漏掉的症状是安装后一导出就报「找不到模板 standard」——而开发机上一切正常，
+    因为源码树里它们就在那儿。
+    """
+    from qbank.exchange.exporters.templates import BUILTIN_DIR, discover
+
+    assert BUILTIN_DIR.is_dir(), f"内置模板目录不存在：{BUILTIN_DIR}"
+    assert SRC in BUILTIN_DIR.parents, f"{BUILTIN_DIR} 不在 qbank 包内，打包会漏"
+    assert sorted(key for key, item in discover().items() if item.builtin) == [
+        "compact",
+        "exam",
+        "standard",
+    ]

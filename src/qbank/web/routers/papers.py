@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+import zipfile
+from pathlib import Path
 from typing import Any
 
 import yaml
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from qbank.core.blueprint import Blueprint
@@ -26,7 +28,21 @@ from qbank.core.repo.paper import PaperRepo
 from qbank.core.repo.tag import TagRepo
 from qbank.core.services.paper import PaperService, ShortageError
 from qbank.core.services.selection import BlueprintError
-from qbank.web.deps import get_session
+from qbank.exchange.export_service import (
+    ExportResult,
+    ExportService,
+    available_formats,
+)
+from qbank.exchange.exporters.context import Layout
+from qbank.exchange.exporters.pdf import PdfUnavailableError
+from qbank.exchange.exporters.templates import (
+    DEFAULT_TEMPLATE,
+    ExportFormat,
+    TemplateNotFoundError,
+    discover,
+)
+from qbank.exchange.pandoc import PandocConversionError
+from qbank.web.deps import get_context, get_session
 from qbank.web.forms import (
     FormError,
     parse_blueprint_form,
@@ -239,6 +255,7 @@ def paper_detail(
     answers: bool = True,
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
+    context = get_context(request)
     try:
         paper = PaperRepo(session).get_detailed(paper_id, include_deleted=True)
     except NotFoundError as exc:
@@ -253,6 +270,11 @@ def paper_detail(
             "paper": paper,
             "view": build_paper_view(paper, _options(), with_answers=answers),
             "show_answers": answers,
+            "export_formats": [
+                (fmt, usable, reason) for fmt, (usable, reason) in available_formats().items()
+            ],
+            "export_layouts": [(item.value, item.label) for item in Layout],
+            "export_templates": sorted(discover(context.paths).items()),
             "flashes": flashes(msg, level),
         },
     )
@@ -504,3 +526,67 @@ def paper_add_questions(
         return redirect_with(target, str(exc), "error")
     level = "ok" if outcome.added else "warn"
     return redirect_with(target, f"《{paper.title}》：{outcome.summary}", level)
+
+
+# ===================================================================== 导出
+def _zip_with_assets(result: ExportResult) -> Path:
+    """md 带旁挂图片时打成一个 zip。
+
+    浏览器下载只能拿到一个文件。直接给 .md 的话，图片目录留在服务器上，用户
+    打开文件看到的是一堆坏掉的图片引用——而他完全不知道还有另一个目录。
+    """
+    bundle = result.path.with_suffix(".zip")
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(result.path, arcname=result.path.name)
+        for extra in result.extra_files:
+            archive.write(extra, arcname=f"{result.path.stem}.assets/{extra.name}")
+    return bundle
+
+
+@router.get("/papers/{paper_id}/export", response_model=None)
+def paper_export(
+    request: Request,
+    paper_id: str,
+    fmt: str = "pdf",
+    layout: str = "paper",
+    template: str = DEFAULT_TEMPLATE,
+    session: Session = Depends(get_session),
+) -> Response:
+    """导出并下载。
+
+    文件同时留在数据目录的 ``exports/`` 里——命令行导出也是落在那儿，两边
+    一致；而且浏览器的下载目录之外还有一份，找不到时有地方可查。
+    """
+    back = f"/papers/{paper_id}"
+    try:
+        chosen = ExportFormat(fmt.lower())
+        wanted = Layout(layout.lower())
+    except ValueError:
+        return redirect_with(back, f"不认识的导出格式或版面：{fmt}/{layout}", "error")
+
+    usable, reason = available_formats()[chosen]
+    if not usable:
+        return redirect_with(back, f"导不了 {chosen.label}：{reason}", "error")
+
+    try:
+        paper = PaperRepo(session).get_detailed(paper_id, include_deleted=True)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    context = get_context(request)
+    try:
+        result = ExportService(session, context.paths).export(
+            paper, chosen, layout=wanted, template=template
+        )
+    except TemplateNotFoundError as exc:
+        return redirect_with(back, str(exc), "error")
+    except (PandocConversionError, PdfUnavailableError) as exc:
+        return redirect_with(back, str(exc).splitlines()[0], "error")
+
+    download = result.path
+    media_type = chosen.media_type
+    if result.extra_files:
+        download = _zip_with_assets(result)
+        media_type = "application/zip"
+    response: Response = FileResponse(download, filename=download.name, media_type=media_type)
+    return response

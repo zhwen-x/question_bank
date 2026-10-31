@@ -1,0 +1,111 @@
+{#- 正式考试卷：在标准卷基础上加密封线、得分栏与考生信息栏。
+
+    密封线用 position: fixed —— Chromium 打印时固定定位元素会在**每一页**重复，
+    这正是密封线要的效果（每页左侧都有）。 -#}
+{% extends "standard/paper.html.j2" %}
+
+{#- 左边距留窄，密封线占的那条带子由 body 的 padding 让出来：
+    @page 的左边距之外是印不到的，密封线必须画在内容盒子里。 -#}
+{% block page_margin %}18mm 16mm{% endblock %}
+
+{% block extra_styles %}
+/* 密封线。fixed 元素在 Chromium 打印时逐页重复，正好是密封线要的行为。
+   它占的那条带子必须由 body 的 padding 让出来——否则正文会从它下面穿过去，
+   印出来是一条划掉半张卷子的虚线（实测踩过）。 */
+.seal {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 20mm;
+  border-right: 1px dashed #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.seal span {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.6em;
+  font-size: 10.5pt;
+  color: #000;
+  white-space: nowrap;
+}
+body { padding-left: 26mm; }
+
+/* 考生信息栏：每一栏都给够手写的宽度 */
+.exam-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  justify-content: center;
+  margin: 12px 0 4px;
+  font-size: 11pt;
+}
+.exam-fields u { display: inline-block; min-width: 6.5em; border-bottom: 1px solid #000;
+                 text-decoration: none; }
+
+/* 大题得分栏。评卷人逐题签字是纸质阅卷的惯例 */
+.score-box {
+  float: right;
+  border-collapse: collapse;
+  font-size: 9.5pt;
+  margin: 0 0 4px 10px;
+}
+.score-box td, .score-box th {
+  border: 1px solid #000;
+  padding: 2px 10px;
+  text-align: center;
+  font-weight: normal;
+}
+.score-box th { background: #f0f0f0; }
+
+.total-box { margin: 10px auto 0; border-collapse: collapse; font-size: 10pt; }
+.total-box td, .total-box th { border: 1px solid #000; padding: 3px 14px; text-align: center; }
+.total-box th { background: #f0f0f0; font-weight: normal; }
+
+/* 基础模板在 @media print 里把 padding 清零了，这里必须把密封线那条带子
+   重新让出来，而且要排在它后面才能生效 */
+@media print { body { padding: 0 0 0 26mm; } }
+{% endblock %}
+
+{% block header %}
+{% if paper.layout.value == "paper" %}
+<div class="seal"><span>密 封 线 内 不 要 答 题</span></div>
+{% endif %}
+<header class="paper-head">
+  <h1>{{ paper.title }}{% if paper.layout.value == "answers" %}　参考答案{% endif %}</h1>
+  {% if paper.meta %}
+  <div class="meta">
+    {% for key, value in paper.meta.items() %}<span>{{ key }}：{{ value }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  <div class="tally">
+    满分 {{ paper.total_score | g }} 分　共 {{ paper.question_count }} 题
+    {% if paper.layout.value != "paper" %}　{{ paper.layout.label }}{% endif %}
+  </div>
+  {% if paper.layout.value == "paper" %}
+  <div class="exam-fields">
+    <span>院系 <u></u></span><span>班级 <u></u></span><span>姓名 <u></u></span>
+    <span>学号 <u></u></span><span>考场 <u></u></span><span>座位号 <u></u></span>
+  </div>
+  <table class="total-box">
+    <tr>
+      <th>题号</th>
+      {% for section in paper.sections %}<th>{{ section.number | cn }}</th>{% endfor %}
+      <th>总分</th>
+    </tr>
+    <tr>
+      <td>满分</td>
+      {% for section in paper.sections %}<td>{{ section.total_score | g }}</td>{% endfor %}
+      <td>{{ paper.total_score | g }}</td>
+    </tr>
+    <tr>
+      <td>得分</td>
+      {% for section in paper.sections %}<td>　</td>{% endfor %}
+      <td>　</td>
+    </tr>
+  </table>
+  {% endif %}
+</header>
+<hr class="rule">
+{% endblock %}
