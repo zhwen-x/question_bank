@@ -10,6 +10,18 @@
   </span>
 </div>
 
+{% if target_paper %}
+<div class="flash ok" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+  <span>
+    正在往《<strong>{{ target_paper.title }}</strong>》里挑题。
+    勾选后点页面底部的「加入试卷」；可以一边筛选、一边翻页、一边勾。
+  </span>
+  <span style="flex:1"></span>
+  <a class="btn btn-sm" href="/papers/{{ target_paper.id }}">看试卷</a>
+  <a class="btn btn-sm btn-quiet" href="/questions?course_id={{ course.id }}">退出挑题</a>
+</div>
+{% endif %}
+
 {# 筛选条。整页状态都在 URL 里，所以「数据结构第2章的难题」可以收藏成书签。 #}
 <form class="card" method="get" action="/questions">
   <input type="hidden" name="course_id" value="{{ course.id }}">
@@ -18,6 +30,10 @@
   {# 搜索框只在顶栏有一个。这里用隐藏字段把查询词带上，
      这样「先搜索、再按题型收窄」不会把搜索词丢掉。 #}
   <input type="hidden" name="q" value="{{ filters.q or '' }}">
+  {% if filters.add_to %}<input type="hidden" name="add_to" value="{{ filters.add_to }}">{% endif %}
+  {% if filters.section_id %}
+    <input type="hidden" name="section_id" value="{{ filters.section_id }}">
+  {% endif %}
   <div class="field-row" style="align-items: flex-end">
     <div class="field">
       <label for="f-type">题型</label>
@@ -91,6 +107,54 @@
     </p>
   </div>
 {% else %}
+  {% if target_paper %}
+  {# 挑题模式：整张列表是一个表单。行不再整块可点——复选框和链接不能嵌在同一个
+     <a> 里，所以这里换成「勾选区 + 单独的查看链接」。 #}
+  <form method="post" action="/papers/{{ target_paper.id }}/add" id="pick-form">
+    <input type="hidden" name="back" value="/questions?{{ query_string }}">
+    <div class="q-list">
+      {% for row in rows %}
+        {% set used = row.id in already_used %}
+        <div class="q-item pick-item {% if used %}used{% endif %}">
+          <div class="meta">
+            <label class="inline" style="font-weight:600">
+              <input type="checkbox" name="question_id" value="{{ row.id }}"
+                     {% if used %}disabled{% endif %}>
+              {% if used %}已在卷中{% else %}选入{% endif %}
+            </label>
+            {% with question = row.question %}
+              {% include "partials/question_meta.html" %}
+            {% endwith %}
+            <span style="flex:1"></span>
+            <a class="badge" href="/questions/{{ row.id }}" target="_blank">查看</a>
+          </div>
+          <div class="stem rendered">{{ row.excerpt_html | safe }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="sticky-actions">
+      <div class="field" style="flex:0 0 200px">
+        <label for="pick-section">加到哪个大题</label>
+        <select id="pick-section" name="section_id">
+          {% for section in target_paper.sections %}
+            <option value="{{ section.id }}"
+                    {% if section.id == target_section_id %}selected{% endif %}>
+              {{ section.title }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" style="flex:0 0 130px">
+        <label for="pick-score">每题分值</label>
+        <input id="pick-score" name="score" type="number" step="0.5" min="0"
+               placeholder="题目自带">
+      </div>
+      <span style="flex:1"></span>
+      <button type="submit" class="btn btn-primary">加入试卷</button>
+    </div>
+  </form>
+  {% else %}
   <div class="q-list">
     {% for row in rows %}
       <a class="q-item" href="/questions/{{ row.id }}">
@@ -103,6 +167,7 @@
       </a>
     {% endfor %}
   </div>
+  {% endif %}
 
   {% if total_pages > 1 %}
   <nav class="pager">

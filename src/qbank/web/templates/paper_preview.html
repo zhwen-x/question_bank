@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>组卷预览</h1>
+  <span class="sub">{{ blueprint.title }}</span>
+</div>
+
+{% if result.ok %}
+  <div class="flash ok">
+    抽齐了：共 {{ result.question_count }} 道、{{ "%g" | format(result.total_score) }} 分，
+    随机种子 <strong>{{ result.seed }}</strong>。确认无误后点下面的「生成试卷」。
+  </div>
+{% else %}
+  <div class="flash error">
+    <strong>组不齐，没有生成试卷。</strong>
+    按这份蓝图只能抽到 {{ result.question_count }} 道、{{ "%g" | format(result.total_score) }} 分。
+    <ul style="margin:8px 0 0 18px">
+      {% for shortage in result.shortages %}
+        <li>
+          {{ shortage.describe() }}
+          {% if shortage.hints %}
+          <ul style="margin:4px 0 0 14px; color: var(--text-dim)">
+            {% for hint in shortage.hints %}<li>{{ hint }}</li>{% endfor %}
+          </ul>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+{% if result.zero_score_count %}
+  <div class="flash warn">
+    有 {{ result.zero_score_count }} 道题配分为 0——多半是这一节没填「每题分值」，
+    而题目自身也没有分值。生成后可以在试卷页改。
+  </div>
+{% endif %}
+
+<div class="card">
+  <table class="rendered" style="width:100%">
+    <thead>
+      <tr><th>大题</th><th style="width:110px">抽中/需要</th><th style="width:90px">小计</th></tr>
+    </thead>
+    <tbody>
+    {% for section in picked %}
+      <tr>
+        <td>{{ section.title }}</td>
+        <td>
+          {{ section.filled }} / {{ section.wanted }}
+          {% if section.short_by > 0 %}
+            <span class="badge" style="background:var(--danger-bg); color:var(--danger)">
+              缺 {{ section.short_by }}
+            </span>
+          {% endif %}
+        </td>
+        <td>{{ "%g" | format(section.total_score) }} 分</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="toolbar">
+  <form method="post" action="/papers/assemble" style="display:flex; gap:8px; align-items:center">
+    <input type="hidden" name="course_id" value="{{ course.id }}">
+    <input type="hidden" name="source" value="yaml">
+    <input type="hidden" name="blueprint_yaml" value="{{ blueprint_yaml }}">
+    <input type="hidden" name="seed" value="{{ result.seed }}">
+    {% if result.ok %}
+      <button type="submit" class="btn btn-primary" name="action" value="commit">生成试卷</button>
+    {% else %}
+      <label class="inline">
+        <input type="checkbox" name="allow_partial" value="1" required>
+        我知道缺 {{ result.shortages | map(attribute='missing') | sum }} 道，仍要生成
+      </label>
+      <button type="submit" class="btn btn-danger" name="action" value="commit">按缺额生成</button>
+    {% endif %}
+    <button type="submit" class="btn" name="action" value="preview">换一批（重抽）</button>
+  </form>
+  <span style="flex:1"></span>
+  <a class="btn btn-quiet" href="/papers/assemble?course_id={{ course.id }}">改蓝图</a>
+</div>
+<p class="hint">
+  「换一批」会用新的随机种子重抽。生成用的是上面那个种子
+  <strong>{{ result.seed }}</strong>，所以生成出来的就是你现在看到的这一份。
+</p>
+
+{% for section in picked %}
+<h2 style="margin:18px 0 6px">
+  {{ section.title }}
+  <span class="sub" style="font-weight:normal">
+    {{ section.filled }} 道 · {{ "%g" | format(section.total_score) }} 分
+  </span>
+</h2>
+{% if section.instructions %}<p class="hint">{{ section.instructions }}</p>{% endif %}
+{% if not section.picked %}
+  <p class="hint">这一节没有抽到任何题。</p>
+{% else %}
+<div class="q-list">
+  {% for row in section.picked %}
+    <a class="q-item" href="/questions/{{ row.id }}" target="_blank">
+      <div class="meta">
+        <span class="badge score">{{ "%g" | format(row.score) }} 分</span>
+        <span class="badge">{{ row.difficulty_label }}</span>
+        {% for tag in row.question.tags %}<span class="badge tag">{{ tag.name }}</span>{% endfor %}
+      </div>
+      <div class="stem rendered">{{ row.excerpt_html | safe }}</div>
+    </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endfor %}
+
+<details class="card" style="margin-top:20px">
+  <summary>这份蓝图（可存成文件，明年再用）</summary>
+  <pre style="font-family: var(--mono); font-size:12px; overflow-x:auto; margin:8px 0 0"><code>{{ blueprint_yaml }}</code></pre>
+  <p class="hint">
+    命令行里用：<code>qbank paper assemble {{ course.name }} 蓝图.yaml --seed {{ result.seed }}</code>
+  </p>
+</details>
+
+{% endblock %}

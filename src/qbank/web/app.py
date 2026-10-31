@@ -39,6 +39,7 @@ def create_app(context: AppContext | None = None) -> FastAPI:
         courses,
         health,
         imports,
+        papers,
         questions,
         tags,
     )
@@ -51,6 +52,7 @@ def create_app(context: AppContext | None = None) -> FastAPI:
         assets.router,
         health.router,
         imports.router,
+        papers.router,
     ):
         application.include_router(router)
 

@@ -20,6 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from qbank.core.enums import Difficulty, QuestionStatus, QuestionType
 from qbank.core.models import (
+    Paper,
     Question,
     QuestionAnswer,
     QuestionTag,
@@ -162,6 +163,38 @@ class QuestionRepo(Repo):
             self._apply(select(Question), criteria).options(selectinload(Question.tags))
         ).all()
 
+    def ids(self, criteria: QuestionFilter) -> list[str]:
+        """只取 id。
+
+        自动组卷的候选池动辄上千条，而求解阶段只需要 id——整行加载是白花钱。
+
+        **必须带 ``ORDER BY``**：SQL 不保证没有排序子句时的行序，而「同一个
+        seed 出同一份卷子」要求候选池的初始顺序本身是确定的。少了这一句，
+        同一份蓝图在两次运行、两个平台上可能抽出不同的题，而这种不一致极难
+        察觉——每一份卷子单看都是合理的。
+        """
+        return list(
+            self.session.scalars(self._apply(select(Question.id), criteria).order_by(Question.id))
+        )
+
+    def get_many(self, question_ids: Sequence[str]) -> dict[str, Question]:
+        """按 id 批量取题，一次把答案、标签、子题都带上。
+
+        组卷成卷时要为每道题冻结快照，逐条 ``get_detailed`` 会退化成几百条 SQL。
+        """
+        if not question_ids:
+            return {}
+        rows = self.session.scalars(
+            select(Question)
+            .where(Question.id.in_(list(question_ids)))
+            .options(
+                selectinload(Question.answer),
+                selectinload(Question.tags),
+                selectinload(Question.sub_questions).selectinload(Question.answer),
+            )
+        ).all()
+        return {question.id: question for question in rows}
+
     def count(self, criteria: QuestionFilter) -> int:
         return int(self.session.scalar(self._apply(select(func.count(Question.id)), criteria)) or 0)
 
@@ -242,10 +275,14 @@ class QuestionRepo(Repo):
                 )
             )
         if criteria.exclude_used_within_days is not None:
+            # 只算还在用的卷子。删掉的卷子不该继续占着题——否则试着组几次卷再
+            # 删掉，就把这批题封印了几个月，而用户完全看不出是什么原因
             cutoff = utcnow() - timedelta(days=criteria.exclude_used_within_days)
             statement = statement.where(
                 Question.id.notin_(
-                    select(QuestionUsage.question_id).where(QuestionUsage.used_at >= cutoff)
+                    select(QuestionUsage.question_id)
+                    .join(Paper, Paper.id == QuestionUsage.paper_id)
+                    .where(QuestionUsage.used_at >= cutoff, Paper.deleted_at.is_(None))
                 )
             )
         return statement

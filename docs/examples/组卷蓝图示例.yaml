@@ -1,0 +1,62 @@
+# 组卷蓝图示例：一份 100 分的数据结构期末卷
+#
+# 用法：
+#   qbank paper assemble 数据结构 docs/examples/组卷蓝图示例.yaml --dry-run   # 先看一眼
+#   qbank paper assemble 数据结构 docs/examples/组卷蓝图示例.yaml             # 确认后生成
+#
+# 同一个题库 + 同一份蓝图 + 同一个 seed，抽出来的题和顺序完全一致。
+# 想出 B 卷就只改 seed（或用 `qbank paper variant`，它会自动避开 A 卷用过的题）。
+
+title: 2026 春季《数据结构》期末考试
+total_score: 100          # 填了就会校验各节配分之和对不对得上，笔误当场发现
+seed: 20261030            # 留空则每次现取一个，并记在试卷上以便复现
+avoid_used_within_days: 180   # 避开近半年考过的题
+
+# 默认只抽「启用」状态的题。要把草稿也算上才写这一行：
+# statuses: [active, draft]
+
+shuffle_items: false      # 打乱每节内部的题目顺序
+template_key: standard
+
+meta:                     # 这些会原样交给导出模板
+  考试时长: 120 分钟
+  适用班级: 计算机 2024 级
+  命题人: 张老师
+
+sections:
+  - title: 一、单项选择题（每题 2 分，共 20 分）
+    instructions: 每题只有一个正确选项，请将答案填在题号前的括号内。
+    types: [single_choice]
+    count: 10
+    score_each: 2
+    # 难度配比：按比例分层抽样，各档道数之和恰好等于 count
+    difficulty_mix: {2: 0.3, 3: 0.5, 4: 0.2}
+    shuffle_options: true   # 选项乱序；重排后会重新编号，答案跟着换
+
+  - title: 二、判断题（每题 1 分，共 10 分）
+    types: [true_false]
+    count: 10
+    score_each: 1
+    # 只限难度范围、不管分布时用 difficulties（与 difficulty_mix 二选一）
+    difficulties: [1, 2, 3]
+
+  - title: 三、填空题（每空 2 分，共 20 分）
+    types: [fill_blank]
+    count: 10
+    score_each: 2
+
+  - title: 四、简答题（每题 10 分，共 20 分）
+    types: [short_answer]
+    count: 2
+    score_each: 10
+    chapters:               # 限定章节，含其全部子章节；写错章节名会报错而不是抽不到题
+      - 第3章 栈和队列
+      - 第4章 树
+
+  - title: 五、综合应用题（每题 15 分，共 30 分）
+    types: [comprehensive, programming]
+    count: 2
+    score_each: 15
+    difficulties: [4, 5]
+    tags_any: [图, 最短路径]   # 具备任一标签即可；tags_all 则要求全部具备
+    require_answer: true       # 只抽有参考答案的题

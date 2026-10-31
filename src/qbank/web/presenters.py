@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from qbank.core.content.render import MathMode, RenderOptions, render_markdown
-from qbank.core.models import Question
+from qbank.core.models import Paper, PaperItem, PaperSection, Question
 from qbank.core.schemas import QuestionDraft
 
 #: 列表行里题干摘要的字符上限
@@ -242,3 +242,199 @@ class PlannedView:
         因为相似很可能就是另一道题。
         """
         return self.exact_duplicate is None
+
+
+# ============================================================== 试卷
+@dataclass(slots=True)
+class PaperItemView:
+    """试卷上的一道题。
+
+    渲染的是**快照**，不是题库里的当前版本——这正是快照的用途。原题被改过或
+    被删掉时页面要能说清楚，否则老师会以为卷子跟着变了（或者没跟着变是 bug）。
+    """
+
+    item: PaperItem
+    number: int
+    draft: QuestionDraft
+    stem_html: str
+    options: list[OptionView] = field(default_factory=list)
+    answer_html: str = ""
+    explanation_html: str = ""
+    sub_questions: list[SubQuestionView] = field(default_factory=list)
+    #: 选项被打乱过（展示的标号与原题不同）
+    shuffled: bool = False
+    #: 原题已不在题库里（被彻底删除）
+    orphaned: bool = False
+
+    @property
+    def id(self) -> str:
+        return self.item.id
+
+    @property
+    def type_label(self) -> str:
+        return self.draft.type.label
+
+
+@dataclass(slots=True)
+class PaperSectionView:
+    section: PaperSection
+    items: list[PaperItemView]
+
+    @property
+    def id(self) -> str:
+        return self.section.id
+
+    @property
+    def total_score(self) -> float:
+        return sum(view.item.score for view in self.items)
+
+
+@dataclass(slots=True)
+class PaperView:
+    paper: Paper
+    sections: list[PaperSectionView]
+
+    @property
+    def total_score(self) -> float:
+        return sum(section.total_score for section in self.sections)
+
+    @property
+    def question_count(self) -> int:
+        return sum(len(section.items) for section in self.sections)
+
+    @property
+    def zero_score_items(self) -> int:
+        """配分为 0 的题数。多半是哪里漏填了，页面要提醒。"""
+        return sum(1 for s in self.sections for view in s.items if not view.item.score)
+
+    @property
+    def orphaned_items(self) -> int:
+        return sum(1 for s in self.sections for view in s.items if view.orphaned)
+
+
+def build_paper_view(
+    paper: Paper, options: RenderOptions, *, with_answers: bool = True
+) -> PaperView:
+    """试卷详情页的视图模型。
+
+    ``with_answers=False`` 时不渲染答案与解析——「预览学生拿到的样子」用得上，
+    也省掉一半 Markdown 渲染。
+    """
+    from qbank.core.services.paper import display_answer, display_options, thaw
+
+    def html(markdown: str) -> str:
+        return render_markdown(markdown, options) if markdown else ""
+
+    sections: list[PaperSectionView] = []
+    for section in paper.sections:
+        views: list[PaperItemView] = []
+        for number, item in enumerate(section.items, start=1):
+            draft = thaw(item.snapshot)
+            shown = display_options(draft, item.option_order)
+            view = PaperItemView(
+                item=item,
+                number=number,
+                draft=draft,
+                stem_html=html(draft.stem),
+                options=[
+                    OptionView(
+                        label=option.label,
+                        content_html=html(option.content),
+                        is_correct=option.is_correct,
+                    )
+                    for option in shown
+                ],
+                shuffled=bool(item.option_order),
+                orphaned=item.question_id is None,
+            )
+            if with_answers:
+                view.answer_html = html(display_answer(draft, item.option_order))
+                view.explanation_html = html(draft.explanation)
+                view.sub_questions = [
+                    SubQuestionView(
+                        index=index,
+                        type_label=sub.type.label,
+                        score=sub.score,
+                        stem_html=html(sub.stem),
+                        answer_html=html(sub.answer),
+                        explanation_html=html(sub.explanation),
+                    )
+                    for index, sub in enumerate(draft.sub_questions, start=1)
+                ]
+            else:
+                view.sub_questions = [
+                    SubQuestionView(
+                        index=index,
+                        type_label=sub.type.label,
+                        score=sub.score,
+                        stem_html=html(sub.stem),
+                        answer_html="",
+                        explanation_html="",
+                    )
+                    for index, sub in enumerate(draft.sub_questions, start=1)
+                ]
+            views.append(view)
+        sections.append(PaperSectionView(section=section, items=views))
+    return PaperView(paper=paper, sections=sections)
+
+
+@dataclass(slots=True)
+class PickedView:
+    """组卷预览里的一行：抽中了哪道题。"""
+
+    question: Question
+    excerpt_html: str
+    score: float
+    difficulty_label: str
+
+    @property
+    def id(self) -> str:
+        return self.question.id
+
+
+@dataclass(slots=True)
+class PickedSectionView:
+    title: str
+    instructions: str
+    wanted: int
+    picked: list[PickedView]
+
+    @property
+    def filled(self) -> int:
+        return len(self.picked)
+
+    @property
+    def total_score(self) -> float:
+        return sum(row.score for row in self.picked)
+
+    @property
+    def short_by(self) -> int:
+        return self.wanted - self.filled
+
+
+def build_picked_sections(result: Any, options: RenderOptions) -> list[PickedSectionView]:
+    """组卷预览：抽中的题按节列出。
+
+    只渲染题干摘要——预览页一次要显示几十道题，整题渲染既慢又让人看不过来。
+    真正要确认的是「抽中了哪些题、配分对不对、缺不缺」。
+    """
+    sections: list[PickedSectionView] = []
+    for selected in result.sections:
+        rows = [
+            PickedView(
+                question=question,
+                excerpt_html=render_markdown(stem_excerpt(question.stem), options),
+                score=selected.score_of(question),
+                difficulty_label=question.difficulty.label,
+            )
+            for question in selected.questions
+        ]
+        sections.append(
+            PickedSectionView(
+                title=selected.spec.title,
+                instructions=selected.spec.instructions,
+                wanted=selected.spec.count,
+                picked=rows,
+            )
+        )
+    return sections

@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>自动组卷</h1>
+  <span class="sub">{{ course.name }}</span>
+</div>
+
+{% if errors %}
+  <div class="flash error">
+    <strong>蓝图还不能用：</strong>
+    <ul style="margin:6px 0 0 18px">
+      {% for message in errors.messages %}<li>{{ message }}</li>{% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<p class="hint" style="margin-bottom:12px">
+  下一步是<strong>预览</strong>：抽完会逐节列出抽中了哪些题、配分对不对、缺不缺，
+  确认后才真的生成试卷。抽不齐时不会默默少出几道，而是告诉你缺哪一类、
+  放宽哪个条件能补上几道。
+</p>
+
+<form method="post" action="/papers/assemble" id="assemble-form">
+  <input type="hidden" name="course_id" value="{{ course.id }}">
+  <input type="hidden" name="source" value="form">
+
+  <div class="card">
+    <div class="field-row">
+      <div class="field" style="flex:3">
+        <label for="title">试卷标题</label>
+        <input id="title" name="title" type="text" required
+               value="{{ form.get('title') if form else '' }}"
+               placeholder="2026 春季《{{ course.name }}》期末考试">
+      </div>
+      <div class="field">
+        <label for="total_score">期望总分</label>
+        <input id="total_score" name="total_score" type="number" step="0.5" min="0"
+               value="{{ form.get('total_score') if form else '100' }}">
+        <div class="hint">填了就会校验各节配分之和</div>
+      </div>
+      <div class="field">
+        <label for="seed">随机种子</label>
+        <input id="seed" name="seed" type="number"
+               value="{{ form.get('seed') if form else '' }}" placeholder="留空则现取">
+        <div class="hint">同种子 + 同题库状态 = 同一份卷</div>
+      </div>
+      <div class="field">
+        <label for="avoid_days">避开近几天用过的题</label>
+        <input id="avoid_days" name="avoid_days" type="number" min="0"
+               value="{{ form.get('avoid_days') if form else '180' }}">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="meta_duration">考试时长</label>
+        <input id="meta_duration" name="meta_duration" type="text" placeholder="120 分钟"
+               value="{{ form.get('meta_duration') if form else '' }}">
+      </div>
+      <div class="field">
+        <label for="meta_class">适用班级</label>
+        <input id="meta_class" name="meta_class" type="text"
+               value="{{ form.get('meta_class') if form else '' }}">
+      </div>
+      <div class="field">
+        <label for="meta_author">命题人</label>
+        <input id="meta_author" name="meta_author" type="text"
+               value="{{ form.get('meta_author') if form else '' }}">
+      </div>
+      <div class="field">
+        <label>其他</label>
+        <label class="inline"><input type="checkbox" name="shuffle_items"
+          {% if form and form.get('shuffle_items') %}checked{% endif %}> 打乱每节内的题序</label>
+        <label class="inline"><input type="checkbox" name="include_draft"
+          {% if form and form.get('include_draft') %}checked{% endif %}> 草稿题也抽</label>
+      </div>
+    </div>
+  </div>
+
+  <h2 style="margin:18px 0 8px">大题</h2>
+  <div id="section-rows">
+    {% set rows = section_rows if section_rows else [0] %}
+    {% for index in rows %}
+    {# 校验失败时整行回填。下拉多选与复选框也要回填——一个大题要填十一个字段，
+       因为总分差了 5 分就把章节和标签的勾选清空，等于让人从头再来一遍。 #}
+    {% set picked_chapters = form.getlist('section_chapter_' ~ index) if form else [] %}
+    {% set picked_tags = form.getlist('section_tag_' ~ index) if form else [] %}
+    <div class="card section-row" data-section-row>
+      <div class="field-row">
+        <div class="field" style="flex:3">
+          <label>标题</label>
+          <input name="section_title_{{ index }}" type="text" required
+                 value="{{ form.get('section_title_' ~ index) if form else '' }}"
+                 placeholder="一、单项选择题（每题 2 分，共 20 分）">
+        </div>
+        <div class="field">
+          <label>题型</label>
+          <select name="section_type_{{ index }}">
+            <option value="">不限</option>
+            {% for kind in types %}
+              <option value="{{ kind.value }}"
+                {% if form and form.get('section_type_' ~ index) == kind.value %}selected{% endif %}>
+                {{ kind.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="flex:0 0 90px">
+          <label>题数</label>
+          <input name="section_count_{{ index }}" type="number" min="1" required
+                 value="{{ form.get('section_count_' ~ index) if form else '' }}">
+        </div>
+        <div class="field" style="flex:0 0 110px">
+          <label>每题分值</label>
+          <input name="section_score_{{ index }}" type="number" step="0.5" min="0"
+                 value="{{ form.get('section_score_' ~ index) if form else '' }}"
+                 placeholder="题目自带">
+        </div>
+        <div class="field" style="flex:0 0 40px; align-self:flex-end">
+          <button type="button" class="btn btn-sm btn-danger" data-remove-section
+                  title="删除这个大题">×</button>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field" style="flex:2">
+          <label>难度</label>
+          <input name="section_difficulty_{{ index }}" type="text"
+                 value="{{ form.get('section_difficulty_' ~ index) if form else '' }}"
+                 placeholder="3-5　或　2:3 3:5 4:2">
+          <div class="hint">
+            <code>3-5</code> / <code>3,4,5</code> 只限范围；
+            <code>2:3 3:5 4:2</code> 或 <code>2:30% 3:70%</code> 按配比分层抽
+          </div>
+        </div>
+        <div class="field">
+          <label>章节</label>
+          <select name="section_chapter_{{ index }}" multiple size="3">
+            {% for chapter in chapters %}
+              <option value="{{ chapter.path }}"
+                      {% if chapter.path in picked_chapters %}selected{% endif %}>
+                {{ chapter.path }}
+              </option>
+            {% endfor %}
+          </select>
+          <div class="hint">不选＝不限；选一章含其子章节</div>
+        </div>
+        <div class="field">
+          <label>标签（任一）</label>
+          <select name="section_tag_{{ index }}" multiple size="3">
+            {% for tag in all_tags %}
+              <option value="{{ tag.name }}"
+                      {% if tag.name in picked_tags %}selected{% endif %}>
+                {{ tag.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>其他</label>
+          <label class="inline">
+            <input type="checkbox" name="section_shuffle_{{ index }}"
+                   {% if form and form.get('section_shuffle_' ~ index) %}checked{% endif %}>
+            选项乱序
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="section_require_answer_{{ index }}"
+                   {% if form and form.get('section_require_answer_' ~ index) %}checked{% endif %}>
+            必须有答案
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="section_unchaptered_{{ index }}"
+                   {% if form and form.get('section_unchaptered_' ~ index) %}checked{% endif %}>
+            含未归类
+          </label>
+        </div>
+      </div>
+      <div class="field">
+        <label>答题说明（可留空）</label>
+        <input name="section_instructions_{{ index }}" type="text"
+               value="{{ form.get('section_instructions_' ~ index) if form else '' }}"
+               placeholder="每题只有一个正确选项，请将答案填在题号前的括号内。">
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="toolbar">
+    <button type="button" class="btn" id="add-section">+ 添加大题</button>
+    <span style="flex:1"></span>
+    <button type="submit" class="btn btn-primary" name="action" value="preview">抽题预览</button>
+  </div>
+</form>
+
+<details class="card" style="margin-top:20px">
+  <summary><strong>或者直接粘贴蓝图 YAML</strong></summary>
+  <p class="hint" style="margin-top:8px">
+    蓝图文件可以存下来、提交进 git、明年再用一次。
+    一个大题要混多种题型（如综合题 + 编程题）时只能走这条路——
+    上面的表单每节只能选一个题型。格式见
+    <code>docs/examples/组卷蓝图示例.yaml</code>。
+  </p>
+  <form method="post" action="/papers/assemble">
+    <input type="hidden" name="course_id" value="{{ course.id }}">
+    <input type="hidden" name="source" value="yaml">
+    <div class="field">
+      <textarea name="blueprint_yaml" rows="14" spellcheck="false"
+                style="font-family: var(--mono); font-size:12px"
+                placeholder="title: 2026 春季期末&#10;total_score: 100&#10;sections:&#10;  - title: 一、单项选择题&#10;    types: [single_choice]&#10;    count: 10&#10;    score_each: 2">{{ form.get('blueprint_yaml') if form else '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary" name="action" value="preview">抽题预览</button>
+  </form>
+</details>
+
+{% endblock %}

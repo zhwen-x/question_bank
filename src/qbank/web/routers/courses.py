@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from qbank.core.repo.base import ConflictError
 from qbank.core.repo.course import CourseRepo
+from qbank.core.repo.paper import PaperRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
+from qbank.core.services.question import QuestionService
 from qbank.web.deps import get_session
 from qbank.web.nav import build_nav
 from qbank.web.routers.common import flashes, redirect_with
@@ -26,6 +28,7 @@ def course_list(
 ) -> HTMLResponse:
     repo = CourseRepo(session)
     questions = QuestionRepo(session)
+    papers = PaperRepo(session)
     courses = [
         {
             "course": course,
@@ -33,6 +36,8 @@ def course_list(
             "all_levels": questions.count(
                 QuestionFilter(course_id=course.id, top_level_only=False)
             ),
+            # 删课程会连带删试卷，确认文案里必须说出这个数
+            "papers": len(papers.list_all(course.id, include_deleted=True)),
         }
         for course in repo.list_all()
     ]
@@ -82,13 +87,15 @@ def course_delete(
 ) -> RedirectResponse:
     """删除课程。
 
-    要求把课程名**手打一遍**才执行。这是不可撤销且会连带删除全部题目的操作，
-    一个「确定吗」对话框挡不住误点——题库是老师唯一的一份资料。
+    要求把课程名**手打一遍**才执行。这是不可撤销且会连带删除全部题目与试卷的
+    操作，一个「确定吗」对话框挡不住误点——题库是老师唯一的一份资料。
     """
     repo = CourseRepo(session)
     course = repo.get(course_id)
     if confirm_name.strip() != course.name:
         return redirect_with("/courses", "课程名输入不一致，未执行删除", "error")
     name = course.name
-    repo.delete(course_id)
-    return redirect_with("/courses", f"已删除课程「{name}」及其全部题目")
+    paper_count = len(PaperRepo(session).list_all(course_id, include_deleted=True))
+    QuestionService(session).delete_course(course_id)
+    tail = f"及其全部题目与 {paper_count} 份试卷" if paper_count else "及其全部题目"
+    return redirect_with("/courses", f"已删除课程「{name}」{tail}")

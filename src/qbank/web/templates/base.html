@@ -67,6 +67,13 @@
 
     <div class="nav-group">
       <h3>题库</h3>
+      {% if nav.course %}
+      <a class="nav-item {% if active == 'papers' %}active{% endif %}"
+         href="/papers?course_id={{ nav.course.id }}">
+        <span>试卷与组卷</span>
+        {% if nav.paper_count %}<span class="count">{{ nav.paper_count }}</span>{% endif %}
+      </a>
+      {% endif %}
       <a class="nav-item {% if active == 'import' %}active{% endif %}"
          href="/import{% if nav.course %}?course_id={{ nav.course.id }}{% endif %}">批量导入</a>
       <a class="nav-item {% if active == 'tags' %}active{% endif %}" href="/tags">

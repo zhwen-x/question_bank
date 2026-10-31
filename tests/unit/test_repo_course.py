@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from qbank.core.models import PATH_SEP
@@ -212,3 +213,60 @@ def test_ensure_path_empty_means_no_chapter(courses: CourseRepo, chapters: Chapt
     course = courses.create("计算机网络")
     assert chapters.ensure_path(course.id, "") is None
     assert chapters.ensure_path(course.id, "   /  ") is None
+
+
+# ------------------------------------------------- 删课程（曾经一删就崩）
+def test_deleting_a_course_with_questions_works(session: Session) -> None:
+    """删一门**有题目**的课程。
+
+    这条曾经必崩：``Course.questions`` 关系上没声明 delete 级联时，ORM 会去把
+    ``question.course_id`` 置为 NULL，而那一列是 NOT NULL，于是抛
+    IntegrityError。旧测试只删过空课程，所以一直没发现——而现实里没有人会去删
+    一门空课。修法是 ``passive_deletes=True``：数据库那边本来就声明了
+    ``ON DELETE CASCADE``，交给它做。
+    """
+    from qbank.core.enums import QuestionType
+    from qbank.core.models import Question
+    from qbank.core.schemas import QuestionDraft, SingleChoicePayload
+    from qbank.core.services.question import QuestionService
+
+    course = CourseRepo(session).create("数据结构")
+    service = QuestionService(session)
+    draft = QuestionDraft(
+        type=QuestionType.SINGLE_CHOICE,
+        stem="栈的特点是？",
+        payload=SingleChoicePayload(
+            options=(
+                {"label": "A", "content": "后进先出", "is_correct": True},  # type: ignore[arg-type]
+                {"label": "B", "content": "先进先出"},  # type: ignore[arg-type]
+            )
+        ),
+        answer="A",
+        chapter="第1章 绪论",
+        tags=("基础",),
+    )
+    service.create(course.id, draft)
+    session.flush()
+
+    removed = service.delete_course(course.id)
+
+    assert removed == 1
+    assert CourseRepo(session).find_by_name("数据结构") is None
+    assert session.scalar(select(func.count(Question.id))) == 0
+    assert service.search.indexed_count() == 0, "删课程要顺手清掉它那些题的检索索引"
+
+
+def test_deleting_a_course_takes_its_papers(session: Session) -> None:
+    """试卷挂在课程上，必须跟着一起没——否则留下一堆指向不存在课程的卷子。"""
+    from qbank.core.repo.paper import PaperRepo
+    from qbank.core.services.paper import PaperService
+    from qbank.core.services.question import QuestionService
+
+    course = CourseRepo(session).create("数据结构")
+    PaperService(session).create_empty(course.id, "期末卷", sections=["一、试题"])
+    session.flush()
+    assert len(PaperRepo(session).list_all()) == 1
+
+    QuestionService(session).delete_course(course.id)
+    session.flush()
+    assert PaperRepo(session).list_all(include_deleted=True) == []

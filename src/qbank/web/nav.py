@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-from qbank.core.models import Chapter, Course, Question, Tag
+from qbank.core.models import Chapter, Course, Paper, Question, Tag
 from qbank.core.repo.course import CourseRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
 
@@ -40,6 +40,7 @@ class Nav:
     unchaptered_count: int = 0
     tag_count: int = 0
     trash_count: int = 0
+    paper_count: int = 0
     query: str = ""
 
 
@@ -80,6 +81,14 @@ def build_nav(
         nav.course = next((c for c in nav.courses if c.id == course_id), None)
     if nav.course is None:
         return nav
+    nav.paper_count = int(
+        session.scalar(
+            select(func.count(Paper.id)).where(
+                Paper.course_id == nav.course.id, Paper.deleted_at.is_(None)
+            )
+        )
+        or 0
+    )
 
     chapters = session.scalars(
         select(Chapter).where(Chapter.course_id == nav.course.id).order_by(Chapter.path)

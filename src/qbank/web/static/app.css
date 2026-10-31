@@ -596,3 +596,85 @@ legend { font-size: 12px; font-weight: 600; color: var(--text-dim); padding: 0 6
 }
 .dropzone.over { border-color: var(--accent); background: var(--accent-bg); }
 .dropzone .file-name { font-weight: 550; color: var(--text); }
+
+/* ------------------------------------------------------------ 试卷与组卷 */
+
+/* 行内复选框：复选框与文字基线对齐，整块可点。
+   组卷蓝图和挑题列表里有大量「勾一下」的小开关，各写一遍行内样式会很快跑偏。 */
+label.inline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: normal;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin: 1px 0;
+}
+label.inline input { margin: 0; }
+
+/* 挑题模式的行。整行不再是链接（复选框不能嵌在 <a> 里），
+   所以用鼠标样式和 hover 明确「可点的是复选框」。 */
+.pick-item { cursor: default; }
+.pick-item:hover { border-color: var(--border-strong); }
+.pick-item.used { opacity: 0.55; }
+.pick-item.used:hover { border-color: var(--border); box-shadow: none; }
+
+/* 试卷上的一道题。比列表行留白多一点——这是要逐题核对的页面，
+   题干、选项、答案三段之间需要能一眼分开。 */
+.paper-item { padding: 12px 14px; }
+.paper-item .meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.paper-item .meta form { margin: 0; }
+.paper-item .stem { margin: 0; }
+
+/* 蓝图里的一个大题。左侧竖条让「这一组字段属于同一个大题」一眼可见，
+   否则十几个输入框平铺下来根本看不出分组。 */
+.section-row {
+  border-left: 3px solid var(--accent);
+  padding-left: 12px;
+}
+.section-row + .section-row { margin-top: 10px; }
+
+/* 大题标题。这页的主要用途是逐题核对，所以标题要像标题，
+   编辑控件收在下面的折叠块里。 */
+.section-head {
+  margin: 22px 0 2px;
+  font-size: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.section-head .sub { font-size: 12px; font-weight: normal; color: var(--text-dim); }
+.section-note { margin: 0 0 6px; }
+.section-edit { margin-bottom: 10px; padding: 8px 12px; }
+.section-edit summary { cursor: pointer; }
+
+/* 一道题右上角的「⋯」：跨大题移动是低频操作，不该和每天都用的
+   改分、上下移挤在同一行里。 */
+details.more { position: relative; }
+details.more > summary { list-style: none; display: inline-block; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more .more-panel {
+  position: absolute;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 8px;
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+details.more .more-panel .hint { margin: 0; }

@@ -36,6 +36,7 @@
     {% if row.all_levels > row.total %}
       <span class="badge">含小问共 {{ row.all_levels }} 条</span>
     {% endif %}
+    {% if row.papers %}<span class="badge">{{ row.papers }} 份试卷</span>{% endif %}
     <span style="flex:1"></span>
     <a class="btn btn-sm" href="/questions?course_id={{ row.course.id }}">查看题目</a>
     <a class="btn btn-sm" href="/chapters?course_id={{ row.course.id }}">章节</a>
@@ -58,7 +59,8 @@
             style="display:flex; gap:8px; align-items:flex-end">
         <div class="field" style="margin-bottom:0">
           <label style="color: var(--danger)">
-            删除课程及其 {{ row.all_levels }} 条题目 —— 输入课程名确认
+            删除课程及其 {{ row.all_levels }} 条题目{% if row.papers %}、
+            {{ row.papers }} 份试卷{% endif %} —— 输入课程名确认
           </label>
           <input name="confirm_name" type="text" placeholder="{{ row.course.name }}" required>
           <div class="hint">不可撤销。建议先导出备份。</div>

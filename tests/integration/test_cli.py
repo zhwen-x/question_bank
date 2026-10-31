@@ -391,3 +391,151 @@ def test_asset_stats_and_clean() -> None:
     run("import", "数据结构", str(EXAMPLES / "导入模板示例.md"), "--yes")
     assert "没有孤儿图片" in run("asset", "stats")
     assert "没有孤儿图片" in run("asset", "clean")
+
+
+# ===================================================================== 组卷
+BULK_QUESTIONS = [
+    {
+        "type": "single_choice",
+        "stem": f"第{index}题：下列关于栈的说法正确的是？",
+        "payload": {
+            "type": "single_choice",
+            "options": [
+                {"label": "A", "content": "后进先出", "is_correct": True},
+                {"label": "B", "content": "先进先出"},
+                {"label": "C", "content": "随机存取"},
+                {"label": "D", "content": "以上都不对"},
+            ],
+        },
+        "answer": "A",
+        "difficulty": 2 + index % 3,
+        "chapter": "第1章 绪论",
+        "status": "active",
+    }
+    for index in range(20)
+]
+
+
+@pytest.fixture
+def paper_bank(tmp_path: Path) -> Path:
+    """一门课 + 20 道启用状态的单选题，够组几份卷。"""
+    path = tmp_path / "bulk.yaml"
+    path.write_text(
+        yaml.safe_dump(BULK_QUESTIONS, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    run("course", "add", "数据结构")
+    run("question", "add", "数据结构", str(path))
+    blueprint = tmp_path / "blueprint.yaml"
+    blueprint.write_text(
+        yaml.safe_dump(
+            {
+                "title": "期末考试",
+                "total_score": 100,
+                "sections": [
+                    {
+                        "title": "一、单项选择题",
+                        "types": ["single_choice"],
+                        "count": 10,
+                        "score_each": 10,
+                    }
+                ],
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return blueprint
+
+
+def test_assemble_dry_run_writes_nothing(paper_bank: Path) -> None:
+    output = run("paper", "assemble", "数据结构", str(paper_bank), "--dry-run", "--seed", "7")
+    assert "10/10 道" in output
+    assert "没有生成试卷" in output
+    assert "还没有试卷" in run("paper", "list")
+
+
+def test_assemble_then_show(paper_bank: Path) -> None:
+    output = run("paper", "assemble", "数据结构", str(paper_bank), "--seed", "7")
+    assert "已生成" in output
+    assert "种子 7" in output
+
+    listed = run("paper", "list")
+    assert "100 分" in listed
+    assert "seed=7" in listed
+
+    paper_id = listed.split()[0]
+    shown = run("paper", "show", paper_id, "--answers")
+    assert "期末考试" in shown
+    assert "实际 10 道、100 分" in shown
+    assert "答案：A" in shown
+
+
+def test_same_seed_draws_the_same_questions(paper_bank: Path, tmp_path: Path) -> None:
+    """题库状态没变时，两次 --dry-run 必须抽到同一批题。"""
+    first = run("paper", "assemble", "数据结构", str(paper_bank), "--dry-run", "--seed", "99")
+    second = run("paper", "assemble", "数据结构", str(paper_bank), "--dry-run", "--seed", "99")
+    assert first == second
+
+
+def test_shortage_is_diagnosed_and_blocks_generation(paper_bank: Path, tmp_path: Path) -> None:
+    """抽不齐时报清楚缺什么，并且**不**生成缺斤短两的卷子。"""
+    greedy = tmp_path / "greedy.yaml"
+    greedy.write_text(
+        yaml.safe_dump(
+            {
+                "title": "不可能的卷",
+                "sections": [
+                    {"title": "一、单选", "types": ["single_choice"], "count": 50, "score_each": 2}
+                ],
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["paper", "assemble", "数据结构", str(greedy)])
+    assert result.exit_code == 1
+    assert "缺 30 道" in result.output
+    assert "没有生成试卷" in result.output
+    assert "还没有试卷" in run("paper", "list")
+
+
+def test_blueprint_errors_are_listed_not_stack_traced(paper_bank: Path, tmp_path: Path) -> None:
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "title: x\nsections:\n  - title: 一\n    count: 2\n    scores_each: 2\n", "utf-8"
+    )
+    result = runner.invoke(app, ["paper", "assemble", "数据结构", str(bad), "--dry-run"])
+    assert result.exit_code == 1
+    assert "有 1 处问题" in result.output
+    assert "scores_each" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_variant_avoids_the_original(paper_bank: Path) -> None:
+    run("paper", "assemble", "数据结构", str(paper_bank), "--seed", "7")
+    paper_id = run("paper", "list").split()[0]
+    output = run("paper", "variant", paper_id, "--title", "B 卷", "--seed", "8")
+    assert "已生成《B 卷》" in output
+
+    first = {line for line in run("paper", "show", paper_id).splitlines() if "：下列关于栈" in line}
+    second_id = next(
+        line.split()[0] for line in run("paper", "list").splitlines() if "B 卷" in line
+    )
+    second = {
+        line for line in run("paper", "show", second_id).splitlines() if "：下列关于栈" in line
+    }
+    assert first and second and not first & second
+
+
+def test_manual_paper_add_and_remove(paper_bank: Path) -> None:
+    run("paper", "new", "数据结构", "随堂测验", "--section", "一、选择题")
+    paper_id = run("paper", "list").split()[0]
+    question_id = run("question", "list", "--course", "数据结构").split()[0]
+
+    assert "加入 1 道" in run("paper", "add", paper_id, question_id, "--score", "5")
+    assert "加入 0 道" in run("paper", "add", paper_id, question_id)
+
+    assert "已移入回收站" in run("paper", "rm", paper_id)
+    assert "还没有试卷" in run("paper", "list")

@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ paper.title }}</h1>
+  <span class="sub">
+    {{ view.question_count }} 道 · {{ "%g" | format(view.total_score) }} 分
+    {% if paper.seed is not none %}· 种子 {{ paper.seed }}{% endif %}
+    {% if paper.deleted_at %}· <strong>在回收站里</strong>{% endif %}
+  </span>
+</div>
+
+{% if paper.deleted_at %}
+<div class="flash warn">
+  这份卷子在回收站里，它用过的题目已重新可用于组卷。
+  <form method="post" action="/papers/{{ paper.id }}/restore" style="display:inline">
+    <button type="submit" class="btn btn-sm">恢复</button>
+  </form>
+</div>
+{% endif %}
+
+{% if view.zero_score_items %}
+<div class="flash warn">
+  有 {{ view.zero_score_items }} 道题配分为 0。可以在下面逐题改，或用每个大题右上角的「统一配分」。
+</div>
+{% endif %}
+
+{% if view.orphaned_items %}
+<div class="flash warn">
+  有 {{ view.orphaned_items }} 道题的原题已从题库彻底删除。
+  <strong>卷面不受影响</strong>——成卷时的题面已经冻结在这份卷子里，只是点不进原题了。
+</div>
+{% endif %}
+
+<div class="toolbar">
+  <a class="btn {% if show_answers %}btn-primary{% endif %}"
+     href="/papers/{{ paper.id }}?answers=1">带答案</a>
+  <a class="btn {% if not show_answers %}btn-primary{% endif %}"
+     href="/papers/{{ paper.id }}?answers=0">学生视角</a>
+  <span style="flex:1"></span>
+  <a class="btn" href="/questions?course_id={{ paper.course_id }}&add_to={{ paper.id }}">
+    从题库挑题加入
+  </a>
+</div>
+
+<details class="card">
+  <summary><strong>卷头信息</strong></summary>
+  <form method="post" action="/papers/{{ paper.id }}/update" style="margin-top:10px">
+    <div class="field">
+      <label for="t">标题</label>
+      <input id="t" name="title" type="text" value="{{ paper.title }}" required>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="md">考试时长</label>
+        <input id="md" name="meta_duration" type="text" value="{{ paper.meta.get('考试时长', '') }}">
+      </div>
+      <div class="field">
+        <label for="mc">适用班级</label>
+        <input id="mc" name="meta_class" type="text" value="{{ paper.meta.get('适用班级', '') }}">
+      </div>
+      <div class="field">
+        <label for="ma">命题人</label>
+        <input id="ma" name="meta_author" type="text" value="{{ paper.meta.get('命题人', '') }}">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">保存</button>
+  </form>
+</details>
+
+{% if paper.blueprint %}
+<details class="card">
+  <summary><strong>再出一套（A/B 卷）</strong></summary>
+  <p class="hint" style="margin-top:8px">
+    照这份卷子的蓝图再抽一份，默认<strong>避开本卷用过的题</strong>——
+    两套卷子考同一批学生时，重题就等于白出。
+  </p>
+  <form method="post" action="/papers/{{ paper.id }}/variant">
+    <div class="field-row" style="align-items:flex-end">
+      <div class="field" style="flex:2">
+        <label for="vt">新卷标题</label>
+        <input id="vt" name="title" type="text" value="{{ paper.title }}（B 卷）">
+      </div>
+      <div class="field">
+        <label for="vs">随机种子</label>
+        <input id="vs" name="seed" type="number" placeholder="留空则现取">
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <label class="inline"><input type="checkbox" name="allow_overlap" value="1">
+          允许与原卷重题</label>
+      </div>
+      <div class="field" style="flex:0">
+        <button type="submit" class="btn btn-primary">生成 B 卷</button>
+      </div>
+    </div>
+  </form>
+</details>
+{% endif %}
+
+{% for section in view.sections %}
+{# 大题标题是这页上最该一眼看到的字，所以它是标题而不是输入框——
+   编辑控件收进下面的折叠块里。这页主要用途是逐题核对，不是填表。 #}
+<h2 class="section-head">
+  {{ section.section.title }}
+  <span class="sub">
+    {{ section.items | length }} 道 · {{ "%g" | format(section.total_score) }} 分
+  </span>
+</h2>
+{% if section.section.instructions %}
+  <p class="hint section-note">{{ section.section.instructions }}</p>
+{% endif %}
+<details class="card section-edit">
+  <summary class="hint">改这个大题</summary>
+  <div class="field-row" style="align-items:flex-end; margin-top:8px">
+    <form method="post" action="/papers/{{ paper.id }}/sections/{{ section.id }}/update"
+          class="field-row" style="flex:3; align-items:flex-end; margin:0">
+      <div class="field" style="flex:2">
+        <label>标题</label>
+        <input name="title" type="text" value="{{ section.section.title }}" required>
+      </div>
+      <div class="field" style="flex:2">
+        <label>答题说明</label>
+        <input name="instructions" type="text" value="{{ section.section.instructions }}">
+      </div>
+      <div class="field" style="flex:0">
+        <button type="submit" class="btn btn-sm">保存</button>
+      </div>
+    </form>
+    <form method="post" action="/papers/{{ paper.id }}/scores"
+          class="field-row" style="flex:1; align-items:flex-end; margin:0">
+      <input type="hidden" name="section_id" value="{{ section.id }}">
+      <div class="field" style="flex:0 0 110px">
+        <label>统一配分</label>
+        <input name="score" type="number" step="0.5" min="0" required placeholder="每题">
+      </div>
+      <div class="field" style="flex:0">
+        <button type="submit" class="btn btn-sm">应用</button>
+      </div>
+    </form>
+    <form method="post" action="/papers/{{ paper.id }}/sections/{{ section.id }}/remove"
+          data-confirm="删除大题「{{ section.section.title }}」及其下 {{ section.items | length }} 道题？题目本身不会被删除。">
+      <button type="submit" class="btn btn-sm btn-danger">删除大题</button>
+    </form>
+  </div>
+</details>
+
+{% if not section.items %}
+  <p class="hint" style="margin:0 0 16px 4px">
+    这个大题还没有题。<a href="/questions?course_id={{ paper.course_id }}&add_to={{ paper.id }}&section_id={{ section.id }}">去题库挑题</a>
+  </p>
+{% endif %}
+
+{% for row in section.items %}
+<div class="card paper-item">
+  <div class="meta" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+    <strong>{{ row.number }}.</strong>
+    <span class="badge type">{{ row.type_label }}</span>
+    <span class="badge">难度{{ row.draft.difficulty.value }}</span>
+    {% if row.shuffled %}
+      <span class="badge" title="成卷时打乱过选项顺序，标号已重新编排">选项已乱序</span>
+    {% endif %}
+    {% if row.orphaned %}
+      <span class="badge" style="background:var(--warn-bg); color:var(--warn)">原题已删除</span>
+    {% elif row.item.question_id %}
+      <a class="badge" href="/questions/{{ row.item.question_id }}" target="_blank">原题</a>
+    {% endif %}
+    <span style="flex:1"></span>
+    <form method="post" action="/papers/{{ paper.id }}/items/{{ row.id }}/score"
+          style="display:flex; gap:4px; align-items:center">
+      <input name="score" type="number" step="0.5" min="0" value="{{ "%g" | format(row.item.score) }}"
+             style="width:72px" aria-label="分值">
+      <span class="hint" style="margin:0">分</span>
+      <button type="submit" class="btn btn-sm">改分</button>
+    </form>
+    <form method="post" action="/papers/{{ paper.id }}/items/{{ row.id }}/move">
+      <input type="hidden" name="offset" value="-1">
+      <button type="submit" class="btn btn-sm" title="上移">↑</button>
+    </form>
+    <form method="post" action="/papers/{{ paper.id }}/items/{{ row.id }}/move">
+      <input type="hidden" name="offset" value="1">
+      <button type="submit" class="btn btn-sm" title="下移">↓</button>
+    </form>
+    {% if view.sections | length > 1 %}
+    <details class="more">
+      <summary class="btn btn-sm" title="移到别的大题">⋯</summary>
+      <form method="post" action="/papers/{{ paper.id }}/items/{{ row.id }}/move"
+            class="more-panel">
+        <label class="hint" for="move-{{ row.id }}">移到</label>
+        <select id="move-{{ row.id }}" name="section_id">
+          {% for other in view.sections %}
+            <option value="{{ other.id }}" {% if other.id == section.id %}selected{% endif %}>
+              {{ other.section.title }}
+            </option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm">移动</button>
+      </form>
+    </details>
+    {% endif %}
+    <form method="post" action="/papers/{{ paper.id }}/items/{{ row.id }}/remove"
+          data-confirm="把这道题移出试卷？题目本身不会被删除。">
+      <button type="submit" class="btn btn-sm btn-danger">移出</button>
+    </form>
+  </div>
+
+  <div class="stem rendered">{{ row.stem_html | safe }}</div>
+
+  {% if row.options %}
+  <div class="rendered" style="margin-top:6px">
+    {% for option in row.options %}
+      <div style="display:flex; gap:6px; align-items:baseline">
+        <span style="min-width:22px; font-weight:600
+              {% if show_answers and option.is_correct %}; color: var(--ok){% endif %}">
+          {{ option.label }}.
+        </span>
+        <span>{{ option.content_html | safe }}</span>
+        {% if show_answers and option.is_correct %}<span style="color: var(--ok)">✓</span>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if row.sub_questions %}
+  <div style="margin-top:8px">
+    {% for sub in row.sub_questions %}
+    <div class="sub-block">
+      <div class="meta">
+        ({{ sub.index }}) <span class="badge type">{{ sub.type_label }}</span>
+        {% if sub.score %}<span class="badge score">{{ "%g" | format(sub.score) }} 分</span>{% endif %}
+      </div>
+      <div class="rendered">{{ sub.stem_html | safe }}</div>
+      {% if show_answers and sub.answer_html %}
+        <div class="rendered" style="color: var(--ok)">答案：{{ sub.answer_html | safe }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if show_answers and row.answer_html %}
+    <div class="rendered" style="margin-top:6px; color: var(--ok)">
+      答案：{{ row.answer_html | safe }}
+    </div>
+  {% endif %}
+  {% if show_answers and row.explanation_html %}
+    <details style="margin-top:4px">
+      <summary class="hint">解析</summary>
+      <div class="rendered">{{ row.explanation_html | safe }}</div>
+    </details>
+  {% endif %}
+</div>
+{% endfor %}
+{% endfor %}
+
+<div class="card">
+  <form method="post" action="/papers/{{ paper.id }}/sections/add" class="field-row"
+        style="align-items:flex-end; margin:0">
+    <div class="field" style="flex:2">
+      <label for="ns">添加大题</label>
+      <input id="ns" name="title" type="text" required placeholder="六、附加题">
+    </div>
+    <div class="field" style="flex:2">
+      <label for="ni">答题说明</label>
+      <input id="ni" name="instructions" type="text">
+    </div>
+    <div class="field" style="flex:0">
+      <button type="submit" class="btn">添加</button>
+    </div>
+  </form>
+</div>
+
+<div class="toolbar">
+  <span style="flex:1"></span>
+  <form method="post" action="/papers/{{ paper.id }}/delete"
+        data-confirm="把《{{ paper.title }}》移入回收站？它用过的题会重新可用于组卷。">
+    <button type="submit" class="btn btn-danger">删除试卷</button>
+  </form>
+</div>
+
+{% endblock %}

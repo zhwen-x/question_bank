@@ -16,6 +16,7 @@ from qbank.core.content.text import to_plain_text
 from qbank.core.enums import Difficulty, QuestionStatus, QuestionType
 from qbank.core.repo.base import NotFoundError
 from qbank.core.repo.course import ChapterRepo, CourseRepo
+from qbank.core.repo.paper import PaperRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
 from qbank.core.repo.tag import TagRepo
 from qbank.core.services.asset import AssetService
@@ -64,6 +65,8 @@ def question_list(
     status: str = "",
     tag: list[str] = Query(default=[]),
     page: int = 1,
+    add_to: str = "",
+    section_id: str = "",
     msg: str = "",
     level: str = "ok",
     session: Session = Depends(get_session),
@@ -122,7 +125,22 @@ def question_list(
         "difficulty": difficulty,
         "status": status,
         "tag": tag,
+        # 带着「正在往哪份卷子里加题」翻页和筛选——挑题是「一边翻一边勾」的
+        # 过程，这个状态一丢，每次翻页都要重新进入加题模式
+        "add_to": add_to,
+        "section_id": section_id,
     }
+    target_paper = None
+    already_used: set[str] = set()
+    if add_to:
+        papers = PaperRepo(session)
+        try:
+            target_paper = papers.get_detailed(add_to)
+        except NotFoundError:
+            base_params["add_to"] = ""
+            base_params["section_id"] = ""
+        else:
+            already_used = papers.used_question_ids(target_paper.id)
     return render(
         request,
         "questions.html",
@@ -148,6 +166,9 @@ def question_list(
             "statuses": list(QuestionStatus),
             "all_tags": list(tags_repo.list_all()),
             "selected_tag_names": [found.name for found in selected_tags],
+            "target_paper": target_paper,
+            "target_section_id": section_id,
+            "already_used": already_used,
             "flashes": flashes(msg, level),
         },
     )

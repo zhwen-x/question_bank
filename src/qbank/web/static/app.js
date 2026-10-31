@@ -385,9 +385,62 @@
     refresh();
   }
 
+  /* ------------------------------------------- 组卷蓝图：增删大题行 */
+
+  /* 蓝图的字段名带行下标（section_title_0、section_count_0…）。
+     克隆一行时必须把整行的 name 都换成新下标，否则两行同名字段会在提交时
+     互相覆盖——页面上完全看不出异常，只是有一个大题莫名消失了。
+
+     删除行留下的下标空号不用管：服务端按下标排序取行，空号不影响顺序。
+     这样就省掉了「删一行就把后面全部重新编号」那段 JS，而那段一旦出错，
+     症状同样是「某个大题没了」。 */
+  function setupSectionRows() {
+    const list = document.getElementById("section-rows");
+    if (!list) return;
+    let nextIndex = 0;
+    list.querySelectorAll("[name]").forEach((field) => {
+      const found = /_(\d+)$/.exec(field.name);
+      if (found) nextIndex = Math.max(nextIndex, Number(found[1]) + 1);
+    });
+
+    const addButton = document.getElementById("add-section");
+    if (addButton) {
+      addButton.addEventListener("click", function () {
+        const last = list.lastElementChild;
+        if (!last) return;
+        const clone = last.cloneNode(true);
+        const index = nextIndex++;
+        clone.querySelectorAll("[name]").forEach((field) => {
+          field.name = field.name.replace(/_\d+$/, "_" + index);
+          if (field.type === "checkbox" || field.type === "radio") {
+            field.checked = false;
+          } else if (field.tagName === "SELECT") {
+            Array.from(field.options).forEach((option) => (option.selected = false));
+          } else {
+            field.value = "";
+          }
+        });
+        list.appendChild(clone);
+        const focusTarget = clone.querySelector('input[type="text"]');
+        if (focusTarget) focusTarget.focus();
+      });
+    }
+
+    list.addEventListener("click", function (event) {
+      const button = event.target.closest("[data-remove-section]");
+      if (!button) return;
+      const rows = list.querySelectorAll("[data-section-row]");
+      // 一个大题都不剩的蓝图没有意义，而且空表单的报错对用户没有帮助
+      if (rows.length <= 1) return;
+      const row = button.closest("[data-section-row]");
+      if (row) row.remove();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("[data-dropzone]").forEach(setupDropzone);
     document.querySelectorAll("[data-reload-on-change]").forEach(setupReload);
     if (document.querySelector('input[name="selected"]')) setupBulkSelect();
+    setupSectionRows();
   });
 })();

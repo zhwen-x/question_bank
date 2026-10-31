@@ -16,8 +16,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+import yaml
+from pydantic import ValidationError
 from starlette.datastructures import FormData
 
+from qbank.core.blueprint import Blueprint
 from qbank.core.enums import (
     BlankMatch,
     Difficulty,
@@ -32,6 +35,9 @@ MAX_SUB_QUESTIONS = 30
 
 #: 选项最多几个
 MAX_OPTIONS = 26
+
+#: 一份蓝图最多几个大题
+MAX_SECTIONS = 20
 
 
 @dataclass
@@ -349,3 +355,203 @@ def parse_question_form(form: FormData) -> QuestionDraft:
         detail = str(exc).split("Value error, ")[-1].split(" [type=")[0].strip()
         errors.add(detail)
         raise errors from exc
+
+
+# ================================================================ 组卷蓝图
+#: 难度表达式里的一项：``3`` / ``3-5`` / ``2:0.3`` / ``2:30%``
+_DIFFICULTY_ITEM = re.compile(
+    r"^\s*(?P<from>[1-5])\s*(?:-\s*(?P<to>[1-5])\s*)?(?::\s*(?P<weight>[0-9.]+)\s*%?\s*)?$"
+)
+
+#: 难度表达式的分隔符：中英文逗号、顿号、分号、空格
+_DIFFICULTY_SPLIT = re.compile(r"[,，、;；\s]+")
+
+
+def parse_difficulty_spec(raw: str) -> tuple[dict[Difficulty, float], tuple[Difficulty, ...]]:
+    """解析一个大题的难度要求，返回 ``(配比, 范围)``。
+
+    一个输入框承担两种语义，因为老师的需求本来就是两种：「易 3 中 5 难 2」是
+    配比，「中等及以上」只是范围。带 ``:`` 的当配比，不带的当范围——这样两种
+    都能一行写完，不必先在界面上选一个模式。
+
+    >>> parse_difficulty_spec("")
+    ({}, ())
+    >>> parse_difficulty_spec("3-5")[1]
+    (<Difficulty.MEDIUM: 3>, <Difficulty.HARD: 4>, <Difficulty.VERY_HARD: 5>)
+    >>> parse_difficulty_spec("3、4,5")[1]
+    (<Difficulty.MEDIUM: 3>, <Difficulty.HARD: 4>, <Difficulty.VERY_HARD: 5>)
+    >>> parse_difficulty_spec("2:3 3:5 4:2")[0]
+    {<Difficulty.EASY: 2>: 3.0, <Difficulty.MEDIUM: 3>: 5.0, <Difficulty.HARD: 4>: 2.0}
+    >>> parse_difficulty_spec("2:30%, 3:70%")[0]
+    {<Difficulty.EASY: 2>: 30.0, <Difficulty.MEDIUM: 3>: 70.0}
+    """
+    text = raw.strip()
+    if not text:
+        return {}, ()
+    mix: dict[Difficulty, float] = {}
+    levels: list[Difficulty] = []
+    for piece in _DIFFICULTY_SPLIT.split(text):
+        if not piece:
+            continue
+        matched = _DIFFICULTY_ITEM.match(piece)
+        if matched is None:
+            raise ValueError(
+                f"难度「{piece}」看不懂。可以写 `3`、`3-5`、`3,4,5`（只限范围），"
+                "或 `2:3 3:5 4:2`、`2:30% 3:70%`（按配比抽）"
+            )
+        weight = matched.group("weight")
+        start = int(matched.group("from"))
+        end = int(matched.group("to") or start)
+        if weight is not None:
+            if end != start:
+                raise ValueError(f"难度「{piece}」：配比要逐档写，不能给一个区间配权重")
+            mix[Difficulty(start)] = float(weight)
+        else:
+            levels.extend(
+                Difficulty(value) for value in range(min(start, end), max(start, end) + 1)
+            )
+    if mix and levels:
+        raise ValueError(
+            "难度里混了配比和范围两种写法。要配比就每档都带 `:权重`（如 `2:3 3:5`），"
+            "只限范围就都不带（如 `3-5`）"
+        )
+    ordered = tuple(sorted(set(levels), key=lambda level: level.value))
+    return mix, ordered
+
+
+def section_indices(form: FormData) -> list[int]:
+    """表单里出现过的大题下标，按序返回。
+
+    前端删掉中间一行时留下的空号是允许的——按下标排序即可保持顺序，省掉一段
+    「删一行就把后面全部重新编号」的 JS（那段 JS 一旦出错，用户会看到两行同名
+    字段互相覆盖，而且很难察觉）。
+    """
+    found: set[int] = set()
+    for key in form:
+        if key.startswith("section_title_"):
+            suffix = key[len("section_title_") :]
+            if suffix.isdigit():
+                found.add(int(suffix))
+    return sorted(found)
+
+
+def parse_blueprint_form(form: FormData) -> Blueprint:
+    """表单 → :class:`Blueprint`。
+
+    校验错误一律收进 :class:`FormError`，由模板回填——组卷蓝图有十几个字段，
+    填错一个就清空整页是不可接受的。
+    """
+    error = FormError()
+    title = _text(form, "title")
+    if not title:
+        error.add("试卷标题不能为空", field_name="title")
+
+    indices = section_indices(form)
+    if not indices:
+        error.add("至少要有一个大题")
+    if len(indices) > MAX_SECTIONS:
+        error.add(f"大题不能超过 {MAX_SECTIONS} 个")
+        indices = indices[:MAX_SECTIONS]
+
+    sections: list[dict[str, Any]] = []
+    for index in indices:
+        section_title = _text(form, f"section_title_{index}")
+        if not section_title:
+            error.add(f"第 {len(sections) + 1} 个大题没有标题", field_name=f"section_title_{index}")
+            continue
+        spec: dict[str, Any] = {
+            "title": section_title,
+            "instructions": _text(form, f"section_instructions_{index}"),
+            "count": int(_number(form, f"section_count_{index}", default=0)),
+            "include_unchaptered": _checked(form, f"section_unchaptered_{index}"),
+            "chapters": tuple(_texts(form, f"section_chapter_{index}")),
+            "tags_any": tuple(_texts(form, f"section_tag_{index}")),
+            "require_answer": _checked(form, f"section_require_answer_{index}"),
+            "shuffle_options": _checked(form, f"section_shuffle_{index}"),
+        }
+        kind = _text(form, f"section_type_{index}")
+        if kind:
+            spec["types"] = (kind,)
+        score_each = _text(form, f"section_score_{index}")
+        if score_each:
+            spec["score_each"] = _number(form, f"section_score_{index}")
+        try:
+            mix, levels = parse_difficulty_spec(_text(form, f"section_difficulty_{index}"))
+        except ValueError as exc:
+            error.add(f"{section_title}：{exc}", field_name=f"section_difficulty_{index}")
+        else:
+            if mix:
+                spec["difficulty_mix"] = mix
+            if levels:
+                spec["difficulties"] = levels
+        sections.append(spec)
+
+    data: dict[str, Any] = {
+        "title": title,
+        "sections": sections,
+        "shuffle_items": _checked(form, "shuffle_items"),
+        "statuses": (
+            (QuestionStatus.ACTIVE, QuestionStatus.DRAFT)
+            if _checked(form, "include_draft")
+            else (QuestionStatus.ACTIVE,)
+        ),
+    }
+    if _text(form, "total_score"):
+        data["total_score"] = _number(form, "total_score")
+    if _text(form, "seed"):
+        data["seed"] = int(_number(form, "seed"))
+    if _text(form, "avoid_days"):
+        data["avoid_used_within_days"] = int(_number(form, "avoid_days"))
+    meta = {
+        key: value
+        for key, value in (
+            ("考试时长", _text(form, "meta_duration")),
+            ("适用班级", _text(form, "meta_class")),
+            ("命题人", _text(form, "meta_author")),
+        )
+        if value
+    }
+    if meta:
+        data["meta"] = meta
+
+    if not error.is_empty:
+        raise error
+    try:
+        return Blueprint.model_validate(data)
+    except ValidationError as exc:
+        for item in exc.errors():
+            location = ".".join(str(part) for part in item["loc"])
+            error.add(f"{location or '蓝图'}：{item['msg']}")
+        raise error from exc
+
+
+def parse_blueprint_yaml(raw: str) -> Blueprint:
+    """粘贴的蓝图 YAML → :class:`Blueprint`。
+
+    结构化表单每节只能选一个题型（放七个复选框会把那一行撑爆），而
+    ``types: [comprehensive, programming]`` 这类写法是真实需求。留这条路进来，
+    界面就不比命令行少功能，也不必为少数场景把表单做成一棵树。
+    """
+    error = FormError()
+    if not raw.strip():
+        error.add("蓝图内容是空的")
+        raise error
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        error.add(f"YAML 语法错误：{exc}")
+        raise error from exc
+    if not isinstance(data, dict):
+        error.add("蓝图的最外层应该是一组 `键: 值`，而不是列表或单个值")
+        raise error
+    try:
+        return Blueprint.model_validate(data)
+    except ValidationError as exc:
+        paths = [tuple(str(part) for part in item["loc"]) for item in exc.errors()]
+        for item, here in zip(exc.errors(), paths, strict=True):
+            # 丢掉上层的连带报错：某节里写错字段名时，pydantic 会再报一句
+            # 「sections 至少要有 1 项」，那句会把人引向错误的方向
+            if any(other != here and other[: len(here)] == here for other in paths):
+                continue
+            error.add(f"{'.'.join(here) or '蓝图'}：{item['msg']}")
+        raise error from exc

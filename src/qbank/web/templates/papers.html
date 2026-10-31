@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ course.name }} · 试卷</h1>
+  <span class="sub">{{ papers | length }} 份</span>
+</div>
+
+<div class="toolbar">
+  <a class="btn btn-primary" href="/papers/assemble?course_id={{ course.id }}">按蓝图自动组卷</a>
+</div>
+
+<details class="card">
+  <summary><strong>手工建一份空白卷</strong></summary>
+  <form method="post" action="/papers/new" style="margin-top:10px">
+    <input type="hidden" name="course_id" value="{{ course.id }}">
+    <div class="field">
+      <label for="p-title">试卷标题</label>
+      <input id="p-title" name="title" type="text" required placeholder="2026 春季期末考试">
+    </div>
+    <div class="field">
+      <label for="p-sections">大题（每行一个）</label>
+      <textarea id="p-sections" name="sections" rows="4"
+                placeholder="一、单项选择题（每题 2 分，共 20 分)&#10;二、判断题&#10;三、综合应用题"></textarea>
+      <div class="hint">留空则建一个叫「一、试题」的大题。之后可以增删改。</div>
+    </div>
+    <button type="submit" class="btn btn-primary">创建，然后去题库挑题</button>
+  </form>
+</details>
+
+{% if not papers %}
+  <div class="empty">
+    <h2>还没有试卷</h2>
+    <p>
+      <strong>自动组卷</strong>按蓝图抽题——规定各大题要什么题型、几道、难度怎么配，
+      抽不齐时会告诉你缺哪一类、放宽哪个条件能补上几道，不会默默少出几道。
+    </p>
+    <p><strong>手工组卷</strong>先建一份空白卷，再从题目列表里勾选加入。</p>
+    <p><a class="btn btn-primary" href="/papers/assemble?course_id={{ course.id }}">开始自动组卷</a></p>
+  </div>
+{% else %}
+<div class="card">
+  <table class="rendered" style="width:100%">
+    <thead>
+      <tr>
+        <th>试卷</th>
+        <th style="width:70px">题数</th>
+        <th style="width:80px">总分</th>
+        <th style="width:130px">来源</th>
+        <th style="width:150px">创建时间</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for paper in papers %}
+      {% set stat = summaries.get(paper.id, (0, 0.0)) %}
+      <tr>
+        <td><a href="/papers/{{ paper.id }}"><strong>{{ paper.title }}</strong></a></td>
+        <td>{{ stat[0] }}</td>
+        <td>{{ "%g" | format(stat[1]) }}</td>
+        <td>
+          {% if paper.seed is not none %}
+            <span class="badge" title="随机种子">seed {{ paper.seed }}</span>
+          {% else %}
+            <span class="badge">手工</span>
+          {% endif %}
+        </td>
+        <td>{{ paper.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if trashed %}
+<details class="card">
+  <summary>回收站（{{ trashed | length }} 份）</summary>
+  <p class="hint">回收站里的卷子不占用题目——它们用过的题可以重新进入自动组卷。</p>
+  <table class="rendered" style="width:100%; margin-top:8px">
+    <tbody>
+    {% for paper in trashed %}
+      <tr>
+        <td>{{ paper.title }}</td>
+        <td style="width:220px">
+          <div style="display:flex; gap:6px">
+            <form method="post" action="/papers/{{ paper.id }}/restore">
+              <button type="submit" class="btn btn-sm">恢复</button>
+            </form>
+            <form method="post" action="/papers/{{ paper.id }}/delete"
+                  data-confirm="彻底删除《{{ paper.title }}》？不可恢复。">
+              <input type="hidden" name="purge" value="1">
+              <button type="submit" class="btn btn-sm btn-danger">彻底删除</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
+{% endblock %}

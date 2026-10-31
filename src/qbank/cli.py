@@ -1,8 +1,8 @@
 """qbank 命令行。
 
-CLI 不只是给人用的——它同时是集成测试的驱动入口。M3 的图形界面上线之前，
-全链路（建课 → 录题 → 检索 → 组卷 → 导出）都靠它跑通；上线之后它依然是
-批处理与脚本化的入口。
+CLI 不只是给人用的——它同时是集成测试的驱动入口。图形界面上线之前，全链路
+（建课 → 录题 → 检索 → 组卷）都靠它跑通；上线之后它依然是批处理与脚本化的
+入口：组卷蓝图是文件，`qbank paper assemble` 可以直接进脚本与 CI。
 """
 
 from __future__ import annotations
@@ -13,17 +13,29 @@ from typing import Annotated, Any
 
 import typer
 import yaml
+from pydantic import ValidationError
 
 from qbank import __version__
 from qbank.app import AppContext, open_bank
+from qbank.core.blueprint import Blueprint
+from qbank.core.content.text import to_plain_text
 from qbank.core.enums import ConflictPolicy, Difficulty, QuestionStatus, QuestionType
 from qbank.core.repo.base import ConflictError, NotFoundError
 from qbank.core.repo.course import ChapterRepo, CourseRepo
+from qbank.core.repo.paper import PaperRepo
 from qbank.core.repo.question import QuestionFilter, QuestionRepo
 from qbank.core.repo.tag import TagRepo
 from qbank.core.schemas import QuestionDraft
 from qbank.core.services.asset import AssetService
+from qbank.core.services.paper import (
+    PaperService,
+    ShortageError,
+    display_answer,
+    display_options,
+    thaw,
+)
 from qbank.core.services.question import QuestionService
+from qbank.core.services.selection import BlueprintError, SelectionResult
 from qbank.doctor import Level, Status, run_checks
 from qbank.exchange.import_service import ImportService, plan_file
 from qbank.exchange.importers.loader import SUPPORTED_SUFFIXES, UnsupportedSourceError
@@ -31,7 +43,7 @@ from qbank.exchange.pandoc import PandocConversionError, PandocUnavailableError
 
 app = typer.Typer(
     name="qbank",
-    help="题库管理系统：多课程题目管理、批量导入、自动组卷与多格式导出。",
+    help="题库管理系统：多课程题目管理、批量导入、自动组卷。",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -41,12 +53,14 @@ tag_app = typer.Typer(help="标签管理", no_args_is_help=True)
 question_app = typer.Typer(help="题目管理", no_args_is_help=True)
 asset_app = typer.Typer(help="图片资源管理", no_args_is_help=True)
 batch_app = typer.Typer(help="导入批次", no_args_is_help=True)
+paper_app = typer.Typer(help="试卷与组卷", no_args_is_help=True)
 app.add_typer(course_app, name="course")
 app.add_typer(chapter_app, name="chapter")
 app.add_typer(tag_app, name="tag")
 app.add_typer(question_app, name="question")
 app.add_typer(asset_app, name="asset")
 app.add_typer(batch_app, name="batch")
+app.add_typer(paper_app, name="paper")
 
 _STATUS_MARK = {Status.OK: "✓", Status.DEGRADED: "!", Status.MISSING: "✗"}
 _STATUS_COLOR = {
@@ -259,7 +273,7 @@ def course_remove(
     name: Annotated[str, typer.Argument(help="课程名或 id")],
     yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过确认")] = False,
 ) -> None:
-    """删除课程，**连带其全部章节与题目**。不可撤销。"""
+    """删除课程，**连带其全部章节、题目与试卷**。不可撤销。"""
     context = _open()
     try:
         course_id = _resolve_course(context, name)
@@ -269,14 +283,17 @@ def course_remove(
             count = QuestionRepo(session).count(
                 QuestionFilter(course_id=course_id, top_level_only=False)
             )
+            # 试卷挂在课程上，会跟着一起没。只说「题目」会让人以为卷子还在
+            papers = len(PaperRepo(session).list_all(course_id, include_deleted=True))
             if not yes:
+                extra = f"、{papers} 份试卷" if papers else ""
                 typer.secho(
-                    f"将删除课程「{course.name}」及其 {count} 道题目，不可撤销。",
+                    f"将删除课程「{course.name}」及其 {count} 道题目{extra}，不可撤销。",
                     fg=typer.colors.YELLOW,
                 )
                 typer.secho("建议先执行备份导出。", fg=typer.colors.YELLOW)
                 typer.confirm("确定继续？", abort=True)
-            repo.delete(course_id)
+            QuestionService(session).delete_course(course_id)
         typer.secho(f"已删除课程「{name}」。", fg=typer.colors.GREEN)
     finally:
         context.close()
@@ -958,3 +975,350 @@ def asset_clean(
 
 if __name__ == "__main__":  # pragma: no cover
     app()
+
+
+# ===================================================================== 组卷
+def _find_paper(session: Any, prefix: str) -> Any:
+    """支持用 id 前缀定位试卷。"""
+    repo = PaperRepo(session)
+    try:
+        return repo.get_detailed(prefix, include_deleted=True)
+    except NotFoundError:
+        pass
+    matches = [
+        paper for paper in repo.list_all(include_deleted=True) if paper.id.startswith(prefix)
+    ]
+    if not matches:
+        typer.secho(f"找不到试卷：{prefix}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    if len(matches) > 1:
+        typer.secho(
+            f"前缀 {prefix} 匹配到 {len(matches)} 份试卷，请用更长的前缀。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return repo.get_detailed(matches[0].id, include_deleted=True)
+
+
+def _load_blueprint(path: Path) -> Blueprint:
+    """从 YAML/JSON 读蓝图。校验失败时逐条列出，而不是抛一堆 pydantic 栈。"""
+    if not path.exists():
+        typer.secho(f"找不到蓝图文件：{path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    raw_text = path.read_text(encoding="utf-8")
+    data = json.loads(raw_text) if path.suffix.lower() == ".json" else yaml.safe_load(raw_text)
+    try:
+        return Blueprint.model_validate(data)
+    except ValidationError as exc:
+        reported = _useful_errors(exc)
+        typer.secho(f"蓝图 {path.name} 有 {len(reported)} 处问题：", fg=typer.colors.RED, err=True)
+        for location, message in reported:
+            typer.secho(f"  {location}：{message}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _useful_errors(exc: ValidationError) -> list[tuple[str, str]]:
+    """挑出值得显示的校验错误。
+
+    丢掉「上层的连带报错」：某一节里写错一个字段名时，pydantic 会先报那个字段，
+    再报一句「sections 至少要有 1 项」——因为那一节整体没通过校验。后者会把人
+    引向错误的方向（「我明明写了一节」），所以凡是路径为另一条错误的前缀的，
+    一律不显示。
+    """
+    errors = exc.errors()
+    paths = [tuple(str(part) for part in error["loc"]) for error in errors]
+    kept: list[tuple[str, str]] = []
+    for index, error in enumerate(errors):
+        here = paths[index]
+        if any(other != here and other[: len(here)] == here for other in paths):
+            continue
+        kept.append((".".join(here) or "(顶层)", str(error["msg"])))
+    return kept
+
+
+def _print_selection(result: SelectionResult) -> None:
+    """抽题结果与诊断。组不齐时用黄色，一眼能看出这份卷还不能用。"""
+    color = typer.colors.GREEN if result.ok else typer.colors.YELLOW
+    typer.secho(result.report(), fg=None if result.ok else color)
+    if result.zero_score_count:
+        typer.secho(
+            f"注意：有 {result.zero_score_count} 道题配分为 0，"
+            "多半是蓝图没写 score_each 而题目自身也没分值。",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@paper_app.command("assemble")
+def paper_assemble(
+    course: Annotated[str, typer.Argument(help="课程名或 id")],
+    blueprint_file: Annotated[Path, typer.Argument(help="蓝图 YAML/JSON 文件")],
+    seed: Annotated[int | None, typer.Option("--seed", help="随机种子；覆盖蓝图里的")] = None,
+    title: Annotated[str, typer.Option("--title", help="试卷标题；覆盖蓝图里的")] = "",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只看抽题结果，不生成试卷")] = False,
+    allow_partial: Annotated[
+        bool, typer.Option("--allow-partial", help="组不齐时也按缺额生成")
+    ] = False,
+) -> None:
+    """按蓝图自动组卷。
+
+    **先 `--dry-run` 看一眼**：组不齐时会告诉你缺哪一类题、放宽哪个条件能补上
+    几道，而不是默默少出几道。确认无误后去掉 `--dry-run`。
+
+    同一个库 + 同一份蓝图 + 同一个 `--seed` 必然给出同一份卷子，所以
+    `--dry-run` 看到的就是接下来会生成的那一份。
+    """
+    blueprint = _load_blueprint(blueprint_file)
+    if title:
+        blueprint = blueprint.model_copy(update={"title": title})
+    context = _open()
+    try:
+        with context.session() as session:
+            course_id = _resolve_course(context, course)
+            service = PaperService(session)
+            if dry_run:
+                try:
+                    result = service.selection.select(course_id, blueprint, seed=seed)
+                except BlueprintError as exc:
+                    typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                    raise typer.Exit(code=1) from exc
+                _print_selection(result)
+                typer.echo("\n（--dry-run：没有生成试卷）")
+                if not result.ok:
+                    raise typer.Exit(code=1)
+                return
+            try:
+                paper, result = service.assemble(
+                    course_id, blueprint, seed=seed, allow_partial=allow_partial
+                )
+            except ShortageError as exc:
+                _print_selection(exc.result)
+                typer.secho(
+                    "\n没有生成试卷。改蓝图后重试，或加 --allow-partial 接受缺额。",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
+            except BlueprintError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            paper_id, paper_title = paper.id, paper.title
+            _print_selection(result)
+        typer.secho(
+            f"\n已生成《{paper_title}》（{paper_id[:8]}），种子 {result.seed}",
+            fg=typer.colors.GREEN,
+        )
+        # 不要在这里教人「重跑同一条命令即可复现」——那是错的：这份卷用掉的题
+        # 已记入使用记录，avoid_used_within_days 会在下一次组卷时把它们挡掉。
+        # 卷子的权威副本是卷子本身（题面已冻结），不是「重跑一遍蓝图」。
+        if blueprint.avoid_used_within_days:
+            typer.echo(
+                f"这 {result.question_count} 道题已记入使用记录，"
+                f"今后 {blueprint.avoid_used_within_days} 天内的组卷会避开它们。"
+            )
+        typer.echo(f"查看：qbank paper show {paper_id[:8]}")
+        typer.echo(f"再出一套不重题的：qbank paper variant {paper_id[:8]}")
+    finally:
+        context.close()
+
+
+@paper_app.command("list")
+def paper_list(
+    course: Annotated[str, typer.Option("--course", "-c", help="只看某门课")] = "",
+) -> None:
+    """列出试卷。"""
+    context = _open()
+    try:
+        with context.session() as session:
+            course_id = _resolve_course(context, course) if course else None
+            repo = PaperRepo(session)
+            papers = repo.list_all(course_id)
+            if not papers:
+                typer.echo("还没有试卷。用 `qbank paper assemble` 组一份。")
+                return
+            summaries = repo.summaries(course_id)
+            for paper in papers:
+                count, score = summaries.get(paper.id, (0, 0.0))
+                stamp = paper.created_at.strftime("%Y-%m-%d %H:%M")
+                seed = f"seed={paper.seed}" if paper.seed is not None else "手工组卷"
+                typer.echo(
+                    f"{paper.id[:8]}  {stamp}  {paper.title:24} "
+                    f"{count:>3} 道  {score:>6g} 分  {seed}"
+                )
+    finally:
+        context.close()
+
+
+@paper_app.command("show")
+def paper_show(
+    paper_id: Annotated[str, typer.Argument(help="试卷 id（可用前 8 位）")],
+    answers: Annotated[bool, typer.Option("--answers", help="同时显示参考答案")] = False,
+) -> None:
+    """显示一份试卷。
+
+    显示的是**成卷时冻结的题面**，不是题库里的当前版本——这正是试卷快照的用途。
+    """
+    context = _open()
+    try:
+        with context.session() as session:
+            paper = _find_paper(session, paper_id)
+            # 标题不加书名号：卷名本身常带《课程名》，再套一层就成了套娃
+            typer.secho(paper.title, bold=True)
+            details = [f"{paper.total_score:g} 分"]
+            if paper.seed is not None:
+                details.append(f"seed={paper.seed}")
+            if paper.deleted_at is not None:
+                details.append("已在回收站")
+            typer.echo("　".join(details))
+            for key, value in paper.meta.items():
+                typer.echo(f"{key}：{value}")
+            for section in paper.sections:
+                typer.secho(f"\n{section.title}", bold=True)
+                # 大题标题里通常已经写了「共 20 分」，所以这里报的是**实际**的
+                # 题数与配分——两者对不上正是要看出来的东西
+                typer.secho(
+                    f"  实际 {len(section.items)} 道、{section.total_score:g} 分",
+                    fg=typer.colors.BRIGHT_BLACK,
+                )
+                if section.instructions:
+                    typer.echo(f"  {section.instructions}")
+                for index, item in enumerate(section.items, start=1):
+                    draft = thaw(item.snapshot)
+                    typer.echo(f"\n{index}. ({item.score:g} 分) {to_plain_text(draft.stem)}")
+                    for option in display_options(draft, item.option_order):
+                        mark = "✓" if answers and option.is_correct else " "
+                        typer.echo(f"   {mark} {option.label}. {to_plain_text(option.content)}")
+                    if answers:
+                        shown = display_answer(draft, item.option_order)
+                        if shown:
+                            typer.secho(f"   答案：{to_plain_text(shown)}", fg=typer.colors.GREEN)
+    finally:
+        context.close()
+
+
+@paper_app.command("new")
+def paper_new(
+    course: Annotated[str, typer.Argument(help="课程名或 id")],
+    title: Annotated[str, typer.Argument(help="试卷标题")],
+    section: Annotated[
+        list[str] | None, typer.Option("--section", "-s", help="大题标题，可多次指定")
+    ] = None,
+) -> None:
+    """建一份空白卷，之后用 `qbank paper add` 逐道加题。"""
+    context = _open()
+    try:
+        course_id = _resolve_course(context, course)
+        with context.session() as session:
+            paper = PaperService(session).create_empty(
+                course_id, title, sections=section or ["一、试题"]
+            )
+            paper_id = paper.id
+        typer.secho(f"已建《{title}》（{paper_id[:8]}）", fg=typer.colors.GREEN)
+    finally:
+        context.close()
+
+
+@paper_app.command("add")
+def paper_add(
+    paper_id: Annotated[str, typer.Argument(help="试卷 id（可用前 8 位）")],
+    question_ids: Annotated[list[str], typer.Argument(help="题目 id（可用前 8 位），可多个")],
+    section: Annotated[int, typer.Option("--section", "-s", help="第几个大题，从 1 开始")] = 1,
+    score: Annotated[
+        float | None, typer.Option("--score", help="每题分值；留空用题目自带的")
+    ] = None,
+) -> None:
+    """把指定题目加进试卷。"""
+    context = _open()
+    try:
+        with context.session() as session:
+            paper = _find_paper(session, paper_id)
+            if not paper.sections:
+                typer.secho(
+                    "这份试卷还没有大题，先用 `qbank paper section add`。",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            if not 1 <= section <= len(paper.sections):
+                typer.secho(
+                    f"试卷只有 {len(paper.sections)} 个大题，"
+                    f"--section 应在 1..{len(paper.sections)}",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            resolved = [_find_question(session, prefix).id for prefix in question_ids]
+            outcome = PaperService(session).add_questions(
+                paper.id, paper.sections[section - 1].id, resolved, score=score
+            )
+            summary = outcome.summary
+        typer.secho(summary, fg=typer.colors.GREEN)
+    finally:
+        context.close()
+
+
+@paper_app.command("variant")
+def paper_variant(
+    paper_id: Annotated[str, typer.Argument(help="原试卷 id（可用前 8 位）")],
+    seed: Annotated[int | None, typer.Option("--seed", help="新种子；留空则现取一个")] = None,
+    title: Annotated[str, typer.Option("--title", help="新试卷标题")] = "",
+    overlap: Annotated[
+        bool, typer.Option("--allow-overlap/--no-overlap", help="是否允许与原卷重题")
+    ] = False,
+) -> None:
+    """照同一份蓝图再出一套（A/B 卷）。默认避开原卷用过的题。"""
+    context = _open()
+    try:
+        with context.session() as session:
+            source = _find_paper(session, paper_id)
+            try:
+                paper, result = PaperService(session).variant(
+                    source.id, title=title, seed=seed, avoid_overlap=not overlap
+                )
+            except ShortageError as exc:
+                _print_selection(exc.result)
+                typer.secho(
+                    "\n没有生成 B 卷：避开原卷用过的题之后库里不够了。"
+                    "可以加 --allow-overlap 允许重题，或先补题。",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
+            except ValueError as exc:
+                typer.secho(str(exc), fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            new_id, new_title = paper.id, paper.title
+            _print_selection(result)
+        typer.secho(f"\n已生成《{new_title}》（{new_id[:8]}）", fg=typer.colors.GREEN)
+    finally:
+        context.close()
+
+
+@paper_app.command("rm")
+def paper_remove(
+    paper_id: Annotated[str, typer.Argument(help="试卷 id（可用前 8 位）")],
+    purge: Annotated[bool, typer.Option("--purge", help="彻底删除而不是放进回收站")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="跳过确认")] = False,
+) -> None:
+    """删除试卷。默认进回收站，可恢复。"""
+    context = _open()
+    try:
+        with context.session() as session:
+            paper = _find_paper(session, paper_id)
+            title = paper.title
+            if purge and not yes:
+                typer.confirm(f"将彻底删除《{title}》，不可恢复。继续？", abort=True)
+            service = PaperService(session)
+            if purge:
+                service.purge(paper.id)
+            else:
+                service.delete(paper.id)
+        if purge:
+            typer.secho(f"已彻底删除《{title}》。", fg=typer.colors.GREEN)
+        else:
+            typer.secho(
+                f"《{title}》已移入回收站。它用过的题目重新可用于组卷。",
+                fg=typer.colors.GREEN,
+            )
+    finally:
+        context.close()

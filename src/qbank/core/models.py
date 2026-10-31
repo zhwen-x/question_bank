@@ -178,7 +178,12 @@ class Course(Base, TimestampMixin):
     chapters: Mapped[list[Chapter]] = relationship(
         back_populates="course", cascade="all, delete-orphan", order_by="Chapter.sort_order"
     )
-    questions: Mapped[list[Question]] = relationship(back_populates="course")
+    #: ``passive_deletes=True`` 不是优化，是正确性：
+    #: 删课程时若让 ORM 处理子行，它会试图把 ``question.course_id`` 置为 NULL
+    #: （关系上没声明 delete 级联时的默认行为），而那一列是 NOT NULL，
+    #: 于是删一门**有题目的**课程必然抛 IntegrityError。数据库这边本来就声明了
+    #: ``ondelete="CASCADE"``，交给它做即可。
+    questions: Mapped[list[Question]] = relationship(back_populates="course", passive_deletes=True)
 
     __table_args__ = (
         UniqueConstraint("name", name="uq_course_name"),

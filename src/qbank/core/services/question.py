@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from qbank.core.enums import ConflictPolicy, QuestionType
@@ -436,6 +437,27 @@ class QuestionService:
             raise ValueError(f"题目没有第 {revision} 版；现有版本：{available}")
         draft = QuestionDraft.model_validate(target.snapshot)
         return self.update(question_id, draft, note=f"回滚到第 {revision} 版")
+
+    def delete_course(self, course_id: str) -> int:
+        """删掉一门课，连同它的章节、题目与试卷，并清掉检索索引。
+
+        课程删除走服务层而不是直接调仓储，是因为**索引不在数据库的级联范围内**：
+        ``question_fts`` 是 FTS5 虚表，没有外键。只删课程的话，索引里会留下一批
+        指向已不存在题目的行——它们不会让检索出错（结果会被题目表那边过滤掉），
+        但会一直占着地方，而且 ``qbank doctor`` 报的「索引是否过期」从此永远对不上。
+
+        返回清理掉的索引条数。
+        """
+        question_ids = [
+            row[0]
+            for row in self.session.execute(
+                select(Question.id).where(Question.course_id == course_id)
+            )
+        ]
+        for question_id in question_ids:
+            self.search.remove(question_id)
+        self.courses.delete(course_id)
+        return len(question_ids)
 
     # ------------------------------------------------------------ 维护
     def reindex_all(self) -> int:

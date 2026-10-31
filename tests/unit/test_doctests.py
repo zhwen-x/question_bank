@@ -24,6 +24,9 @@ MODULES = [
     "qbank.exchange.importers.template",
     "qbank.web.forms",
     "qbank.core.content.diff",
+    "qbank.core.blueprint",
+    "qbank.core.services.selection",
+    "qbank.core.services.paper",
 ]
 
 
