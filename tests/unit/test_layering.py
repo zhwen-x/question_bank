@@ -120,3 +120,50 @@ def test_frozen_paths_use_meipass() -> None:
     from qbank.app import _project_root
 
     assert "_MEIPASS" in inspect.getsource(_project_root)
+
+
+# --------------------------------------------- 三处分层清单必须说同一件事
+#: 分层清单写在三个地方：包文档、设计说明、README。
+#:
+#: 三处各写一份的下场在 M7 的文档审计里原样发生了：README 列了五个包，
+#: 设计说明和 ``__init__.py`` 还停在四个——M6 新增的 ``qbank.desktop`` 哪边都没补。
+#: 读者不知道该信哪份，而「分层」正是这个项目最该说清楚的东西。
+_LAYER_SOURCES = {
+    "qbank/__init__.py": SRC / "__init__.py",
+    "docs/设计说明.md": SRC.parent.parent / "docs" / "设计说明.md",
+    "README.md": SRC.parent.parent / "README.md",
+}
+
+
+def _declared_layers(path: Path) -> set[str]:
+    """抽出文本里点名的 ``qbank.X`` 顶层包。"""
+    import re
+
+    text = path.read_text(encoding="utf-8")
+    # README 与设计说明里还会在正文里顺带提到某个包，所以只认分层清单那一段：
+    # 设计说明在围栏代码块里，README 在表格里，包文档在星号列表里——
+    # 三者的共同点是「行首附近就是 qbank.X」
+    return set(re.findall(r"^[\s|*`]*`{0,2}qbank\.(\w+)`{0,2}", text, re.M))
+
+
+def test_the_three_layer_listings_agree() -> None:
+    declared = {label: _declared_layers(path) for label, path in _LAYER_SOURCES.items()}
+    for label, names in declared.items():
+        assert len(names) >= 4, f"{label} 里只抽到 {names}，抽取逻辑可能失效了"
+
+    reference = declared["qbank/__init__.py"]
+    mismatched = {
+        label: sorted(names ^ reference) for label, names in declared.items() if names != reference
+    }
+    assert not mismatched, "三处分层清单对不上（以包文档为准）：\n  " + "\n  ".join(
+        f"{label} 多出或缺少：{diff}" for label, diff in mismatched.items()
+    )
+
+
+def test_every_declared_layer_really_exists() -> None:
+    """清单里写的包必须真的在，否则读者会去找一个不存在的东西。"""
+    for name in _declared_layers(SRC / "__init__.py"):
+        module = SRC / name
+        assert module.is_dir() or module.with_suffix(".py").is_file(), (
+            f"包文档里写了 qbank.{name}，但它不存在"
+        )

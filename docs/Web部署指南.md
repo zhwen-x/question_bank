@@ -315,7 +315,7 @@ qbank doctor
 | 搜中文永远空、搜英文正常 | 索引是用别的途径写进去的，没走本项目的分词。跑 `qbank reindex` |
 | 早上第一次打开必定 500，刷新就好 | 连接池拿到了被掐断的空闲连接。确认用的是本项目的 `make_engine`（它设了 `pool_pre_ping`） |
 | 图片有时显示有时破图 | 多台服务器而 `QBANK_DATA_DIR` 没共享，见第八节 |
-| `ModuleNotFoundError: psycopg2` | 装一下 `pip install "qbank[postgres]"` |
+| `ModuleNotFoundError: No module named 'psycopg2'` | 连接串挑中了没装的驱动。装 `pip install "qbank[postgres]"` |
 
 ---
 

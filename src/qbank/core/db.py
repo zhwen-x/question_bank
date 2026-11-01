@@ -116,7 +116,7 @@ def search_ddl(dialect: str) -> tuple[str, ...]:
 def _configure_sqlite(dbapi_connection: Any, _record: Any) -> None:
     """每条 SQLite 连接都套上必要的 PRAGMA。"""
     if not isinstance(dbapi_connection, sqlite3.Connection):
-        return  # 将来换 Postgres 时自动跳过
+        return  # 连到 Postgres 时自动跳过：那边没有这些 PRAGMA，也不需要
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys = ON")

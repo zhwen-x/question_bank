@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 from urllib.parse import unquote
@@ -549,20 +550,54 @@ def test_documented_block_defaults_match_the_template() -> None:
 
 
 # ------------------------------------------------------------ 变更记录
-def test_changelog_pending_matches_the_readme() -> None:
-    """变更记录的「还没做」和 README 的「还没做」必须是同一份清单。
+def _pending_topics(text: str) -> set[str]:
+    """把一份「还没做」清单归一成话题集合。
 
-    两处各写一份的下场是其中一处先腐烂，而读者不知道该信哪个。
+    三处的措辞不同——设计说明会多带一段括号解释——所以只比每条的**开头**，
+    即第一个全角括号或逗号之前的部分。
     """
-    changelog = CHANGELOG.read_text("utf-8").split("### 还没做")[1].split("\n---")[0]
-    readme = _pending_section()
-    for item in ("对象存储", "分权"):
-        assert item in changelog, f"变更记录的未完成清单里没有「{item}」"
-        assert item in readme, f"README 的未完成清单里没有「{item}」"
-    # 已经做完的不该还挂在任何一处
-    for done in ("qbz", "pywebview", "Postgres", "认证接入点"):
-        assert done not in changelog, f"「{done}」已经做完了，从变更记录的未完成清单里删掉"
-        assert done not in readme, f"「{done}」已经做完了，从 README 的未完成清单里删掉"
+    return {
+        re.split(r"[（，]", item.strip())[0].strip() for item in re.findall(r"^- (.+)$", text, re.M)
+    }
+
+
+def test_the_three_pending_lists_agree() -> None:
+    """「还没做」清单写在三个地方，必须是同一份。
+
+    各写一份的下场是其中一处先腐烂，而读者不知道该信哪个。审计时实际撞上的就是
+    这个：README 漏了「限流」那条，而原先的断言只硬编码比对了两个关键词，
+    正好绕过了它。所以这里改成整份比对。
+    """
+    lists = {
+        "README.md": _pending_topics(_pending_section()),
+        "CHANGELOG.md": _pending_topics(
+            CHANGELOG.read_text("utf-8").split("### 还没做")[1].split("\n---")[0]
+        ),
+        "docs/设计说明.md": _pending_topics(
+            DESIGN.read_text("utf-8").split("## 十二、还没做的")[1]
+        ),
+    }
+    for label, topics in lists.items():
+        assert len(topics) >= 3, f"{label} 的清单里只抽到 {topics}，抽取逻辑可能失效了"
+
+    reference = lists["README.md"]
+    mismatched = {
+        label: sorted(topics ^ reference) for label, topics in lists.items() if topics != reference
+    }
+    assert not mismatched, "三处「还没做」清单对不上（以 README 为准）：\n  " + "\n  ".join(
+        f"{label} 多出或缺少：{diff}" for label, diff in mismatched.items()
+    )
+
+
+def test_finished_work_is_not_still_listed_as_pending() -> None:
+    """已经做完的不该还挂在任何一处清单里。"""
+    everywhere = (
+        _pending_section()
+        + CHANGELOG.read_text("utf-8").split("### 还没做")[1].split("\n---")[0]
+        + DESIGN.read_text("utf-8").split("## 十二、还没做的")[1]
+    )
+    for done in ("qbz", "pywebview", "Postgres", "认证接入点", "部署文档"):
+        assert done not in everywhere, f"「{done}」已经做完了，从未完成清单里删掉"
 
 
 def test_changelog_covers_every_milestone() -> None:
@@ -671,3 +706,174 @@ def test_deploy_guide_upload_limit_matches_the_code() -> None:
     assert f"{megabytes} MB" in DEPLOY_GUIDE.read_text("utf-8"), (
         f"代码里的上传上限是 {megabytes} MB，指南里写的不是这个数"
     )
+
+
+# -------------------------------- 代码注释里的「还没做」必须真的还没做
+#: 声称某样东西没做的说法
+_UNIMPLEMENTED = re.compile(r"尚未实现|还没实现|还未实现|都没有实现")
+
+SRC = ROOT / "src" / "qbank"
+
+
+def test_unimplemented_claims_in_code_are_still_true() -> None:
+    """注释里说「还没做」的东西，必须真的还没做。
+
+    这条是 M7 的文档审计逼出来的：M6 把 ``.qbz`` 交换包和桌面外壳都做完了，
+    而 ``__init__.py`` 与 ``config.py`` 里还写着「尚未实现」——新人照着读会以为
+    备份功能不存在，而那恰恰是这个项目唯一的备份手段。
+
+    注释比文档更容易腐烂：改功能的人不会顺手去读隔壁模块的模块级 docstring。
+    """
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        for number, line in enumerate(path.read_text("utf-8").splitlines(), 1):
+            if not _UNIMPLEMENTED.search(line):
+                continue
+            where = f"{path.relative_to(SRC)}:{number}"
+            for module in re.findall(r"qbank\.([a-z_]+(?:\.[a-z_]+)*)", line):
+                target = SRC / Path(module.replace(".", "/"))
+                if target.is_dir() or target.with_suffix(".py").is_file():
+                    offenders.append(f"{where} 说 qbank.{module} 还没做，但它已经在了")
+            if ".qbz" in line and (SRC / "exchange" / "bundle.py").is_file():
+                offenders.append(f"{where} 说 .qbz 还没做，但 exchange/bundle.py 已经在了")
+    assert not offenders, "注释已经腐烂：\n  " + "\n  ".join(offenders)
+
+
+# -------------------------------------------------- README 对鉴权的说法
+def test_readme_does_not_claim_there_is_no_authentication() -> None:
+    """M7 之后「还没有鉴权」是一句假话，而它恰好出现在最显眼的地方。
+
+    不是简单禁掉「不鉴权」三个字——默认模式确实不鉴权，那句话是对的。
+    要挡的是「这个系统做不到鉴权」这个意思。
+    """
+    from qbank.web.auth import ENV_MODE, SharedPassword, TrustedHeader
+
+    assert SharedPassword and TrustedHeader, "鉴权策略没了？那 README 的说法也要跟着改"
+
+    readme = README.read_text("utf-8")
+    for stale in ("还没有鉴权", "尚无鉴权", "还没有任何鉴权", "暂时没有鉴权"):
+        assert stale not in readme, f"README 里还写着「{stale}」，而鉴权已经做了"
+    assert ENV_MODE in readme, f"README 没提 {ENV_MODE}，读者不会知道鉴权怎么开"
+
+
+# ------------------------------------------- 设计说明里的 JS 规模
+def test_design_notes_js_size_matches_reality() -> None:
+    """界面脚本的行数是个会悄悄长大的数字。
+
+    审计时实际撞上的是更糟的一种：同一段里先写「约 400 行」，又写「一共一百多行」
+    ——两句话互相打架，读者没法判断该信哪句。
+    """
+    source = (SRC / "web" / "static" / "app.js").read_text("utf-8").splitlines()
+    code_lines = sum(
+        1 for line in source if line.strip() and not line.strip().startswith(("/*", "*", "//"))
+    )
+
+    claimed = re.search(r"约 (\d+) 行原生 JS", DESIGN.read_text("utf-8"))
+    assert claimed, "设计说明里找不到 JS 行数的说法，抽取逻辑可能失效了"
+    stated = int(claimed.group(1))
+    assert abs(stated - code_lines) <= 100, (
+        f"设计说明说约 {stated} 行，实际 {code_lines} 行（不含空行与注释）"
+    )
+
+
+# ------------------------------------------- README 里的 doctor 检查项
+def test_readme_doctor_row_lists_real_checks() -> None:
+    """README 那一行里点的名字，都要对得上真实的检查项。"""
+    from qbank.doctor import run_checks
+
+    real = {check.name for check in run_checks()}
+    row = re.search(r"`qbank doctor` \| 环境自检：([^|]+)\|", README.read_text("utf-8"))
+    assert row, "README 的命令一览里找不到 doctor 那一行"
+
+    listed = [part.strip() for part in re.split(r"[、，与]", row.group(1)) if part.strip()]
+    assert len(listed) >= 4, f"只抽出 {listed}，抽取逻辑可能失效了"
+    phantom = [name for name in listed if not any(name in actual for actual in real)]
+    assert not phantom, (
+        f"README 点了这些检查项，但 doctor 里没有：{phantom}；实际有：{sorted(real)}"
+    )
+
+
+# ------------------------------------------- 部署指南里的具体数字
+def test_deploy_guide_session_lifetime_matches_the_code() -> None:
+    """会话有效期是部署指南承诺给用户的数字。"""
+    import inspect
+
+    from qbank.web.app import _install_access_control
+
+    source = inspect.getsource(_install_access_control)
+    hours = int(re.search(r"max_age=(\d+) \* 3600", source).group(1))  # type: ignore[union-attr]
+    assert f"{hours} 小时" in DEPLOY_GUIDE.read_text("utf-8"), (
+        f"代码里会话有效期是 {hours} 小时，部署指南里写的不是这个数"
+    )
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("psycopg2") is not None,
+    reason="装了 psycopg2 就触发不了这条错误",
+)
+def test_missing_driver_error_matches_the_guide() -> None:
+    """指南里引用的报错要和真实报错一字不差——否则搜不到。"""
+    from qbank.core.db import make_engine
+
+    with pytest.raises(ModuleNotFoundError) as caught:
+        make_engine("postgresql+psycopg2://localhost/x")
+    quoted = f"`ModuleNotFoundError: {caught.value}`"
+    assert quoted in DEPLOY_GUIDE.read_text("utf-8"), (
+        f"指南里引用的报错和真实的对不上。真实的是：{quoted}"
+    )
+
+
+def test_every_documented_command_exists_in_every_doc() -> None:
+    """所有文档（不只 README）里提到的 qbank 子命令都要真的存在。
+
+    原先只查了 README。部署指南里的命令全写在 ```bash 围栏里，而围栏里的命令
+    才是读者会直接复制去执行的那些——写错一个，对方得到的是「No such command」。
+
+    两种来源都收：行内的 `qbank X`，以及 bash 围栏里行首的 qbank X。只认行首是
+    为了避开 `createdb --owner=qbank qbank` 这类把 qbank 当库名的误配。
+    """
+    from qbank.cli import app
+
+    registered = {command.name or command.callback.__name__ for command in app.registered_commands}
+    registered |= {group.name for group in app.registered_groups}
+
+    missing: dict[str, set[str]] = {}
+    for doc in DOCS:
+        text = doc.read_text("utf-8")
+        mentioned = set(re.findall(r"`qbank ([a-z]+)", text))
+        for _, block in fenced_blocks(text):
+            mentioned |= set(re.findall(r"^\s*qbank ([a-z]+)", block, re.M))
+        unknown = {name for name in mentioned if name.replace("_", "-") not in registered}
+        if unknown:
+            missing[doc.name] = unknown
+    assert not missing, f"文档里提到但不存在的命令：{missing}；现有：{sorted(registered)}"
+
+
+def test_tests_named_in_docs_really_exist() -> None:
+    """文档里点名的测试文件与测试函数都要真的在。
+
+    文档好几处用「这条有测试守着：``test_xxx``」来支撑一个论断。测试改个名字
+    是重构时最顺手的事，而那一刻论断就失去了依据——读者去找会扑空，更糟的是
+    论断本身可能也已经不成立了。
+    """
+    tests_root = ROOT / "tests"
+    defined = {
+        name
+        for path in tests_root.rglob("test_*.py")
+        for name in re.findall(r"^def (test_\w+)", path.read_text("utf-8"), re.M)
+    }
+    assert len(defined) > 300, f"只收集到 {len(defined)} 个测试函数，抽取逻辑可能失效了"
+
+    missing: list[str] = []
+    for doc in DOCS:
+        text = doc.read_text("utf-8")
+        for relative in re.findall(r"`?(tests/[\w/]+\.py)", text):
+            if not (ROOT / relative).is_file():
+                missing.append(f"{doc.name} → {relative} 不存在")
+        # 先把文件路径整段摘掉再找函数名，否则 tests/unit/test_layering.py 里的
+        # test_layering 会被当成一个不存在的测试函数
+        prose = re.sub(r"tests/[\w/]+\.py", lambda m: m.group(0).rsplit("/", 1)[0], text)
+        for name in re.findall(r"\b(test_\w{8,})", prose):
+            if name not in defined:
+                missing.append(f"{doc.name} → {name}() 不存在")
+    assert not missing, "文档点名了不存在的测试：\n  " + "\n  ".join(missing)

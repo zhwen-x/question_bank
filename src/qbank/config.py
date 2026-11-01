@@ -70,7 +70,7 @@ class Paths:
 
     @property
     def backups_dir(self) -> Path:
-        """``.qbz`` 交换包与自动备份的存放位置。两者都尚未实现，目录先占住。"""
+        """``.qbz`` 交换包的默认存放位置。定时自动备份还没做，目录先占住。"""
         return self.root / "backups"
 
     @property
