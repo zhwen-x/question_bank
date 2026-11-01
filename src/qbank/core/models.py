@@ -356,7 +356,12 @@ class Question(Base, TimestampMixin):
     answer: Mapped[QuestionAnswer | None] = relationship(
         back_populates="question", cascade="all, delete-orphan", uselist=False
     )
-    tags: Mapped[list[Tag]] = relationship(secondary="question_tag", back_populates="questions")
+    #: 必须显式排序。不写 ``order_by`` 时顺序由数据库决定，SQLite 与 Postgres
+    #: 给的次序不一样（实测：同一道题，一边是「队列、栈」，一边是「栈、队列」）。
+    #: 标签会进导出产物，而「同一份卷导出两次字节一致」是明确承诺过的。
+    tags: Mapped[list[Tag]] = relationship(
+        secondary="question_tag", back_populates="questions", order_by="Tag.name"
+    )
     assets: Mapped[list[Asset]] = relationship(secondary="question_asset")
     revisions: Mapped[list[QuestionRevision]] = relationship(
         back_populates="question",

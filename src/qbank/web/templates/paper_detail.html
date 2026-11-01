@@ -38,9 +38,11 @@
   <a class="btn {% if not show_answers %}btn-primary{% endif %}"
      href="/papers/{{ paper.id }}?answers=0">学生视角</a>
   <span style="flex:1"></span>
+  {% if can_edit %}
   <a class="btn" href="/questions?course_id={{ paper.course_id }}&add_to={{ paper.id }}">
     从题库挑题加入
   </a>
+  {% endif %}
 </div>
 
 <details class="card">

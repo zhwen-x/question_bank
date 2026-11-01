@@ -1,7 +1,8 @@
 """应用上下文：引擎、会话与 schema 版本管理。
 
 CLI、Web 与桌面外壳都从这里取会话，所以「库在哪、schema 是否最新」只有一处
-判断逻辑。
+判断逻辑。库是数据目录里的 SQLite 文件还是一台 Postgres，由
+:func:`qbank.config.database_url` 决定，本模块两种都照同一条流程走。
 
 **schema 的升级策略**：库不存在时直接按模型建表并打上 Alembic 的最新版本戳
 （跳过逐条迁移，快且等价——已有测试断言两条路径产出的 schema 完全一致）；
@@ -20,7 +21,7 @@ from pathlib import Path
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from qbank.config import Paths, get_paths
+from qbank.config import Paths, database_url, get_paths
 from qbank.core.db import init_schema, make_engine, make_session_factory, session_scope
 
 
@@ -43,6 +44,15 @@ def _project_root() -> Path:
 
 #: alembic.ini 与 migrations/ 所在的目录
 PROJECT_ROOT = _project_root()
+
+
+#: 判断「这是不是一个新库」时探测的表。
+#:
+#: 用表是否存在，而不是文件是否存在：Postgres 根本没有「库文件」，而在 SQLite
+#: 上「文件在、表没有」也确实会发生（崩溃留下的零字节文件、手工 touch 出来的
+#: 占位文件）。按文件判断时那种库会被当成老库，接着 ``alembic upgrade`` 撞上
+#: ``init_schema`` 刚建好的表，报 "table already exists"。
+PROBE_TABLE = "question"
 
 
 class SchemaOutdatedError(RuntimeError):
@@ -100,25 +110,28 @@ def _stamp(engine: Engine, revision: str) -> None:
 
 
 def open_bank(
-    db_path: Path | None = None, *, auto_upgrade: bool = True, echo: bool = False
+    url: str | None = None, *, auto_upgrade: bool = True, echo: bool = False
 ) -> AppContext:
     """打开（必要时创建）题库。
+
+    ``url`` 为 ``None`` 时用 :func:`qbank.config.database_url`——默认是数据目录里的
+    SQLite 文件，设了 ``QBANK_DATABASE_URL`` 就是那台数据库。
 
     ``auto_upgrade=False`` 时不做任何 schema 变更，版本落后会抛
     :class:`SchemaOutdatedError`——用于「只读打开别人发来的库」这类场景。
     """
     paths = get_paths().ensure()
-    path = db_path or paths.db_file
-    is_new = not path.exists()
-    engine = make_engine(path, echo=echo)
+    target = url or database_url()
+    engine = make_engine(target, echo=echo)
     head = _head_revision()
+    is_new = not inspect(engine).has_table(PROBE_TABLE)
 
     if is_new:
         init_schema(engine)
         if head:
             _stamp(engine, head)
     else:
-        # FTS 虚表不在 Base.metadata 里；旧库可能缺（例如手工删过），补上是幂等的
+        # 检索索引不在 Base.metadata 里；旧库可能缺（例如手工删过），补上是幂等的
         init_schema(engine)
         current = _current_revision(engine)
         if head and current != head:
@@ -127,15 +140,22 @@ def open_bank(
                     f"题库 schema 版本为 {current or '未标记'}，代码期望 {head}。"
                     "请运行 `alembic upgrade head` 或以可升级方式打开。"
                 )
-            _upgrade(paths)
+            _upgrade(target)
 
     return AppContext(paths=paths, engine=engine, session_factory=make_session_factory(engine))
 
 
-def _upgrade(_paths: Paths) -> None:
+def _upgrade(url: str) -> None:
+    """跑 ``alembic upgrade head``。
+
+    连接串要显式传给 alembic，不能让它自己再去读一遍环境变量：``open_bank`` 允许
+    传入一个和 ``QBANK_DATABASE_URL`` 不同的库，那种情况下让 alembic 自行解析
+    等于**迁移另一个库**——而且不会报错。
+    """
     from alembic import command
     from alembic.config import Config
 
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+    config.set_main_option("sqlalchemy.url", url)
     command.upgrade(config, "head")

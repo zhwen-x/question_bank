@@ -11,9 +11,61 @@
 
 ### 还没做
 
-- Web 端部署文档与认证接入点
-- Postgres 切换验证
+- 图片的对象存储（现在只落文件系统，多机部署要共享目录）
+- 按人分权（只有「可编辑 / 只读」两档，没有用户表）
+- 共享口令没有尝试次数限制，公网部署要在代理层加限流
 - macOS / Windows 的代码签名与公证
+
+---
+
+## M7 Web 预留 — 2026-11-01
+
+同一套代码换两个环境变量就能以 Web 方式跑起来。`core` 与 `exchange` 两个包
+**一行没改**——这是 M0 那条分层约束的兑现检验。
+
+### 新增
+
+- **Postgres 后端**：`QBANK_DATABASE_URL` 一个变量切换，业务代码不变。
+  已实跑验证：建表、导入、中文检索、组卷、四种格式导出、`.qbz` 往返、
+  删课程后从备份恢复
+- **全文检索按方言分后端**：SQLite 用 FTS5，Postgres 用 `tsvector` + GIN。
+  两边索引的是**同一批 token**，命中集合完全一致
+- **认证接入点**：`QBANK_AUTH` 选 `open` / `password` / `header` 三种策略。
+  共享口令支持另设一个只读口令；`header` 模式读反向代理注入的身份头，用来接
+  已有的统一认证。配错时**拒绝启动**，不退回不鉴权
+- **跨站写请求防护**：所有写请求检查同源，不鉴权模式下也开着
+- `qbank doctor` 增加「数据库」与「鉴权」两项；「中文检索」改为在**当前后端**上
+  实探，而不是永远探一个内存 SQLite
+- `qbank info` 报告真实的数据库与检索后端（口令已抹掉）
+- [Web 部署指南](docs/Web部署指南.md)
+- `tests/integration/test_postgres.py`：默认跳过，给 `QBANK_TEST_DATABASE_URL`
+  才跑；其中一条用同一批语料在两种后端上比命中集合
+
+### 修复
+
+- **Postgres 的 `to_tsvector` 会丢光中文**。实测 PostgreSQL 16 的 `default`
+  解析器把中日韩字符判成空白（token 类型 `blank`），`to_tsvector('simple', '栈 图')`
+  返回空向量。改为在 Python 里切好词、拼成 `tsvector` 字面量直接写入，绕过解析器
+  与词典。不验这一条的话，线上症状是「搜英文能搜到、搜中文永远空」，而索引表
+  看起来是满的
+- **标签顺序没有定义**。`Question.tags` 没写 `order_by`，同一道题在 SQLite 上是
+  「队列、栈」、在 Postgres 上是「栈、队列」。标签会进导出产物，而「同一份卷导出
+  两次字节一致」是 M5 承诺过的
+- **上传先读满内存再判大小**。`await file.read()` 之后才检查 80 MB 上限，放到网上
+  就是一条内存耗尽的路子。改成分块读、超限立刻停
+- **空的库文件会被当成老库**。「这是不是新库」原先看文件存不存在，于是崩溃留下的
+  零字节 `qbank.db` 会走升级路径，`alembic upgrade` 撞上刚建好的表。改为探表
+- **`make_engine` 不认 `postgres://`**。Heroku / Railway 这类平台给的就是这种写法，
+  裸 `postgresql://` 又会挑中没装的 psycopg2，报 `ModuleNotFoundError: psycopg2`。
+  两种都统一改写成 `postgresql+psycopg://`
+
+### 变更
+
+- `open_bank()` 的第一个参数从 `db_path: Path` 改为 `url: str`
+- `make_engine()` 接收连接串而非路径；Postgres 连接自动带 `pool_pre_ping`
+  （不带的话，空闲期被掐断的连接会让「早上第一次打开必定 500」）
+- `SearchService` 拆成门面 + 后端两层，SQL 全部挪进
+  `qbank.core.services.search_backend`
 
 ---
 

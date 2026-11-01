@@ -4,6 +4,7 @@
 <div class="empty">
   <h2>
     {% if status_code == 404 %}没有找到这个页面
+    {% elif status_code == 403 %}这个操作被拒绝了
     {% elif status_code == 409 %}和已有数据冲突
     {% elif status_code == 400 %}请求有问题
     {% else %}出错了（{{ status_code }}）

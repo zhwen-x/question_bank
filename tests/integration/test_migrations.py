@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from qbank.config import sqlite_url
 from qbank.core.db import init_schema, make_engine
 
 #: alembic 自己的版本表不参与比较
@@ -82,7 +83,7 @@ def test_migration_matches_create_all(tmp_path: Path) -> None:
 
     created_dir = tmp_path / "created"
     created_dir.mkdir()
-    engine = make_engine(created_dir / "qbank.db")
+    engine = make_engine(sqlite_url(created_dir / "qbank.db"))
     init_schema(engine)
     engine.dispose()
 

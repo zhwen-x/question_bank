@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
+from starlette.datastructures import UploadFile
+
 from qbank.config import Paths, safe_filename
 from qbank.core.models import utcnow
 
@@ -32,6 +34,9 @@ STAGING_TTL = timedelta(hours=12)
 
 #: 上传文件大小上限
 MAX_UPLOAD_BYTES = 80 * 1024 * 1024
+
+#: 流式读取的块大小
+_CHUNK = 1024 * 1024
 
 #: token 与文件名之间的分隔，token 本身是 32 位十六进制
 _STAGED_NAME = re.compile(r"^(?P<token>[0-9a-f]{32})__(?P<name>.+)$")
@@ -56,6 +61,26 @@ def staging_dir(paths: Paths) -> Path:
     directory = paths.cache_dir / "imports"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+async def read_upload(file: UploadFile) -> bytes:
+    """读取上传内容，**超限就立刻停**，不把整个请求体读进内存。
+
+    早先是直接 ``await file.read()`` 再交给 :func:`stage` 判断大小——本地客户端
+    无所谓，放到网上就是一条内存耗尽的路子：谁发一个几 GB 的请求体，worker 就
+    分配几 GB 然后被 OOM 杀掉，而大小检查永远轮不到执行。
+
+    反向代理那边也该设一道（nginx 的 ``client_max_body_size``），但应用自己不能
+    依赖它：直连应用端口的请求绕过代理。
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_CHUNK):
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise StagingError(f"文件超过 {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def stage(paths: Paths, data: bytes, original_name: str) -> StagedFile:

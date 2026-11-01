@@ -14,7 +14,7 @@ qbank 把题目收进一个结构化的本地库，让「找题」变成几秒�
 
 开发中。**已经可以日常使用**的部分：
 
-- **多课程 / 多级章节 / 标签**，中文全文检索（字符 n-gram + SQLite FTS5）
+- **多课程 / 多级章节 / 标签**，中文全文检索（字符 n-gram + SQLite FTS5 / Postgres tsvector）
 - **七种题型**：单选、多选、判断、填空、简答、综合应用（含子题）、编程
 - **内容统一为 Markdown + LaTeX + GFM 表格**，图片按内容哈希寻址，迁移不断链
 - **批量导入** md / docx / html，三种格式共用一套解析器；Word 公式自动转 LaTeX
@@ -32,11 +32,14 @@ qbank 把题目收进一个结构化的本地库，让「找题」变成几秒�
   图片与试卷
 - **桌面应用**：`qbank desktop` 开原生窗口；可用 PyInstaller 打成双击即用的包
 - **修改历史与回滚**、回收站、标签合并、孤儿图片清理、环境自检
+- **部署成 Web**：同一套代码换两个环境变量就能跑在 Postgres 上并带鉴权，
+  见 **[Web 部署指南](docs/Web部署指南.md)**
 
 **还没做**：
 
-- Web 端部署文档与认证接入点
-- Postgres 切换验证
+- 图片的对象存储（现在只落文件系统，多机部署要共享目录）
+- 按人分权（只有「可编辑 / 只读」两档，没有用户表）
+- macOS / Windows 的代码签名与公证
 
 设计上为它们预留的位置见[设计说明](docs/设计说明.md)最后一节。
 
@@ -314,6 +317,36 @@ dist/qbank.app/Contents/MacOS/qbank doctor
 dist/qbank.app/Contents/MacOS/qbank bundle export -o 备份.qbz
 ```
 
+## 部署到 Web
+
+同一套代码，换几个环境变量就从「自己电脑上的窗口」变成「同事们都能打开的网址」：
+
+```bash
+pip install -e ".[web,postgres]"
+
+export QBANK_DATABASE_URL="postgresql://qbank:口令@127.0.0.1/qbank"
+export QBANK_AUTH=password
+export QBANK_AUTH_PASSWORD='教研室内部口令'
+export QBANK_AUTH_READONLY_PASSWORD='给学生看的口令'   # 可选，这一档只能看
+
+alembic upgrade head
+uvicorn qbank.web.app:app --factory --host 127.0.0.1 --port 8765 --workers 4
+```
+
+鉴权有三种：不鉴权（本地默认）、共享口令、信任反向代理注入的身份头（接已有的
+统一认证）。**配错不会退回宽松默认，而是拒绝启动**。所有写请求都要过同源检查，
+这一层在不鉴权模式下也开着。
+
+现有题库搬过去用 `.qbz`，题目 UUID 原样保留：
+
+```bash
+qbank bundle export --output 题库.qbz                      # 旧环境
+QBANK_DATABASE_URL=... qbank bundle import 题库.qbz        # 新环境
+```
+
+反向代理配置、HTTPS、备份、以及「所有写操作 403 但读正常」这类故障的排查，
+见 **[Web 部署指南](docs/Web部署指南.md)**。
+
 ## 文档
 
 - [设计说明](docs/设计说明.md) —— 为什么这样做，以及被实测推翻过的设计
@@ -321,6 +354,7 @@ dist/qbank.app/Contents/MacOS/qbank bundle export -o 备份.qbz
 - [组卷蓝图规范](docs/组卷蓝图规范.md) —— 蓝图的完整字段
 - [导出模板制作指南](docs/导出模板制作指南.md) —— 改版面、做自己的模板
 - [打包分发指南](docs/打包分发指南.md) —— 打成桌面应用，以及捆了什么没捆什么
+- [Web 部署指南](docs/Web部署指南.md) —— Postgres、鉴权、反向代理、常见故障
 - [变更记录](CHANGELOG.md) —— 各里程碑做了什么、推翻过什么
 
 ## 开发
@@ -337,12 +371,20 @@ pytest
 |---|---|---|
 | `qbank.core` | 领域模型、存储、内容渲染、查重、组卷 | 不得依赖 `web` |
 | `qbank.exchange` | 导入导出、`.qbz` 交换包、pandoc 封装 | 可依赖 `core` |
-| `qbank.web` | FastAPI + Jinja2（零前端依赖） | 可依赖 `core` / `exchange` |
+| `qbank.web` | FastAPI + Jinja2（零前端依赖）、鉴权与同源检查 | 可依赖 `core` / `exchange` |
 | `qbank.desktop` | pywebview 外壳 | 只负责开窗，不含业务 |
 | `qbank.cli` | Typer 命令行 | 可依赖全部 |
 
 这条约束是「后续可以部署成 Web 端」唯一的技术保障——只要界面层没渗进内核，
-换前端或换部署形态就不需要动业务代码。
+换前端或换部署形态就不需要动业务代码。M7 兑现了这张支票：换到 Postgres、
+加上鉴权，`core` 与 `exchange` 两个包**一行没改**。
+
+针对 Postgres 的测试默认跳过，要跑的话给一个可以随便删的空库：
+
+```bash
+createdb qbank_test
+QBANK_TEST_DATABASE_URL=postgresql://localhost/qbank_test pytest tests/integration/test_postgres.py
+```
 
 **题库数据不进 Git**（见 `.gitignore`）：SQLite 二进制文件和图片会让仓库迅速
 膨胀且无法 diff。

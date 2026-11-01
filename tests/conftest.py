@@ -17,6 +17,26 @@ from sqlalchemy.orm import Session, sessionmaker
 from qbank import config
 from qbank.app import AppContext
 from qbank.core.db import init_schema, make_memory_engine, make_session_factory
+from qbank.web import auth
+
+
+@pytest.fixture(autouse=True)
+def isolate_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """清掉认证相关的环境变量。
+
+    开发机上为了试 Web 部署设过 ``QBANK_AUTH=password`` 之后，整套 Web 测试会
+    全部 303 跳到登录页——失败信息只说「期望 200 得到 303」，很难想到是环境变量。
+    """
+    for name in (
+        auth.ENV_MODE,
+        auth.ENV_PASSWORD,
+        auth.ENV_READONLY_PASSWORD,
+        auth.ENV_HEADER,
+        auth.ENV_EDITORS,
+        auth.ENV_SECRET_KEY,
+        auth.ENV_HTTPS_ONLY,
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

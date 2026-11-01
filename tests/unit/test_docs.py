@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -30,6 +31,7 @@ BLUEPRINT_SPEC = ROOT / "docs" / "组卷蓝图规范.md"
 BLUEPRINT_EXAMPLE = ROOT / "docs" / "examples" / "组卷蓝图示例.yaml"
 TEMPLATE_GUIDE = ROOT / "docs" / "导出模板制作指南.md"
 PACKAGING_GUIDE = ROOT / "docs" / "打包分发指南.md"
+DEPLOY_GUIDE = ROOT / "docs" / "Web部署指南.md"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
 #: 需要检查的全部文档
@@ -40,6 +42,7 @@ DOCS = [
     BLUEPRINT_SPEC,
     TEMPLATE_GUIDE,
     PACKAGING_GUIDE,
+    DEPLOY_GUIDE,
     CHANGELOG,
     ROOT / "docs" / "examples" / "导入模板示例.md",
 ]
@@ -97,7 +100,8 @@ def test_links_resolve(doc: Path) -> None:
         if target.startswith(("http://", "https://", "#", "mailto:")):
             continue
         path, _, anchor = target.partition("#")
-        resolved = (doc.parent / path).resolve()
+        # 文件名里有空格时链接会写成 %20，渲染器会解码，路径检查也得解码
+        resolved = (doc.parent / unquote(path)).resolve()
         if not resolved.exists():
             broken.append(f"[{label}]({target}) → 文件不存在")
         elif anchor and resolved.suffix == ".md":
@@ -552,11 +556,11 @@ def test_changelog_pending_matches_the_readme() -> None:
     """
     changelog = CHANGELOG.read_text("utf-8").split("### 还没做")[1].split("\n---")[0]
     readme = _pending_section()
-    for item in ("Web 端", "Postgres"):
+    for item in ("对象存储", "分权"):
         assert item in changelog, f"变更记录的未完成清单里没有「{item}」"
         assert item in readme, f"README 的未完成清单里没有「{item}」"
     # 已经做完的不该还挂在任何一处
-    for done in ("qbz", "pywebview"):
+    for done in ("qbz", "pywebview", "Postgres", "认证接入点"):
         assert done not in changelog, f"「{done}」已经做完了，从变更记录的未完成清单里删掉"
         assert done not in readme, f"「{done}」已经做完了，从 README 的未完成清单里删掉"
 
@@ -564,7 +568,7 @@ def test_changelog_pending_matches_the_readme() -> None:
 def test_changelog_covers_every_milestone() -> None:
     """每个已完成的里程碑都要有一节。漏记一个版本等于那段历史没人写。"""
     text = CHANGELOG.read_text("utf-8")
-    for milestone in ("M0", "M1", "M2", "M3", "M4", "M5", "M6"):
+    for milestone in ("M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7"):
         assert f"## {milestone} " in text, f"变更记录里缺 {milestone}"
 
 
@@ -598,3 +602,72 @@ def test_entry_point_keeps_the_cli_reachable() -> None:
     assert "qbank.cli" in entry
     assert "sys.argv" in entry
     assert "doctor" in PACKAGING_GUIDE.read_text("utf-8")
+
+
+# ---------------------------------------------- Web 部署指南
+def test_deploy_guide_documents_every_environment_variable() -> None:
+    """代码里认的每个 ``QBANK_*`` 变量，部署指南的速查表里都要有。
+
+    漏掉一个的后果不是「文档不全」，而是那个开关实际上不存在——没人知道可以设它。
+    """
+    from qbank import config
+    from qbank.web import auth
+
+    known = {
+        value
+        for module in (config, auth)
+        for name, value in vars(module).items()
+        if name.startswith("ENV_") and isinstance(value, str)
+    }
+    assert len(known) >= 8, f"只收集到 {len(known)} 个环境变量常量，抽取逻辑可能失效了"
+
+    guide = DEPLOY_GUIDE.read_text("utf-8")
+    missing = sorted(name for name in known if f"`{name}`" not in guide)
+    assert not missing, f"部署指南没写这些环境变量：{missing}"
+
+
+def test_deploy_guide_lists_only_real_environment_variables() -> None:
+    """反过来：指南里写的变量必须真的被读。写了个不存在的开关比没写更坏。"""
+    from qbank import config
+    from qbank.web import auth
+
+    known = {
+        value
+        for module in (config, auth)
+        for name, value in vars(module).items()
+        if name.startswith("ENV_") and isinstance(value, str)
+    }
+    # 测试用的那个不进部署指南，它只在 pytest 里有意义
+    known.add("QBANK_TEST_DATABASE_URL")
+
+    mentioned = set(re.findall(r"`(QBANK_[A-Z_]+)`", DEPLOY_GUIDE.read_text("utf-8")))
+    assert mentioned, "指南里一个环境变量都没抽到，抽取逻辑可能失效了"
+    unknown = sorted(mentioned - known)
+    assert not unknown, f"指南里写了但代码不认的变量：{unknown}"
+
+
+def test_deploy_guide_auth_modes_match_the_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """指南里列的三种模式，``policy_from_env`` 要真的都认。"""
+    from qbank.web.auth import ENV_MODE, AuthError, policy_from_env
+
+    modes = set(re.findall(r"### `(\w+)`——", DEPLOY_GUIDE.read_text("utf-8")))
+    assert modes == {"open", "password", "header"}, f"指南里讲的模式是 {modes}"
+
+    for mode in sorted(modes):
+        monkeypatch.setenv(ENV_MODE, mode)
+        try:
+            policy_from_env()
+        except AuthError as exc:
+            # 缺配置而报错是对的（password 没给口令就该拒绝启动）；
+            # 要挡住的是「指南写了一个代码根本不认的模式名」
+            assert "不是已知模式" not in str(exc), f"指南写了 {mode}，代码却不认"
+
+
+def test_deploy_guide_upload_limit_matches_the_code() -> None:
+    """指南里的上传上限是个具体数字，改了代码要跟着改。"""
+    from qbank.web.staging import MAX_UPLOAD_BYTES
+
+    megabytes = MAX_UPLOAD_BYTES // 1024 // 1024
+    assert f"{megabytes} MB" in DEPLOY_GUIDE.read_text("utf-8"), (
+        f"代码里的上传上限是 {megabytes} MB，指南里写的不是这个数"
+    )

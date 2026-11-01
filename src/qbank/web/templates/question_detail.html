@@ -20,7 +20,7 @@
     {% if view.draft.est_minutes %} · 约 {{ view.draft.est_minutes }} 分钟{% endif %}
   </span>
   <span style="flex:1"></span>
-  <a class="btn btn-primary" href="/questions/{{ q.id }}/edit">编辑</a>
+  {% if can_edit %}<a class="btn btn-primary" href="/questions/{{ q.id }}/edit">编辑</a>{% endif %}
   <form method="post" action="/questions/{{ q.id }}/delete" style="display:inline"
         data-confirm="移入回收站？可以再恢复。">
     <button type="submit" class="btn btn-danger">删除</button>

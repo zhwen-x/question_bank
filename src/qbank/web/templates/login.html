@@ -1,0 +1,46 @@
+{# 登录页刻意不继承 base.html：那套布局要查课程、章节与各处计数，
+   而还没通过认证的请求不该碰到任何题库数据。 #}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · qbank</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .login-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .login-card { width: 100%; max-width: 320px; }
+  .login-card .brand { font-size: 18px; margin-bottom: 4px; }
+  .login-card .lead { color: var(--text-dim); font-size: 13px; margin: 0 0 18px; }
+</style>
+</head>
+<body>
+<div class="login-page">
+  <div class="card login-card">
+    <div class="brand">qbank <small>题库</small></div>
+    <p class="lead">请输入访问口令。</p>
+
+    {% if error %}
+      <div class="flash error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label for="password">口令</label>
+        {# autofocus 是为了直接能打字；autocomplete=current-password 让密码管理器认得出来 #}
+        <input type="password" id="password" name="password"
+               autocomplete="current-password" autofocus required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%">进入</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

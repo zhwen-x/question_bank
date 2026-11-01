@@ -102,7 +102,9 @@
   </div>
 </form>
 
-{% if rows and not selecting %}
+{# 这条工具条通向批量修改与加入试卷，两件事只读身份都做不了。
+   它是链接和 GET 表单，不是 post 表单，所以躲不开 base.html 那条 CSS，要显式判断。 #}
+{% if rows and not selecting and can_edit %}
 <div class="toolbar">
   <a class="btn" href="/questions?{{ query_string }}&select=1">挑选 / 批量修改</a>
   {% if all_papers %}
@@ -130,10 +132,12 @@
     {% else %}
       <p>这门课下还没有题目。</p>
     {% endif %}
+    {% if can_edit %}
     <p>
       <a class="btn btn-primary" href="/questions/new?course_id={{ course.id }}">手动新建</a>
       <a class="btn" href="/import?course_id={{ course.id }}">批量导入</a>
     </p>
+    {% endif %}
   </div>
 {% else %}
   {% if selecting %}

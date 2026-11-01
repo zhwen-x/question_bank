@@ -19,6 +19,7 @@ from qbank import __version__
 from qbank.app import AppContext, open_bank
 from qbank.core.blueprint import Blueprint
 from qbank.core.content.text import to_plain_text
+from qbank.core.db import describe_database
 from qbank.core.enums import ConflictPolicy, Difficulty, QuestionStatus, QuestionType
 from qbank.core.repo.base import ConflictError, NotFoundError
 from qbank.core.repo.course import ChapterRepo, CourseRepo
@@ -191,20 +192,34 @@ def serve(
     """启动图形界面。
 
     默认只监听 ``127.0.0.1``——这是本地客户端，不该一启动就暴露在局域网里。
-    真要让同事访问，显式写 ``--host 0.0.0.0``，并且清楚当前还没有任何鉴权。
+    真要让同事访问，显式写 ``--host 0.0.0.0``，并且先设好 ``QBANK_AUTH``
+    （见 ``docs/Web部署指南.md``）。
     """
     try:
         from qbank.web.app import serve as run_server
+        from qbank.web.auth import AuthError, OpenAccess, policy_from_env
     except ImportError as exc:
         typer.secho('缺少 Web 依赖。安装：pip install "qbank[web]"', fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
 
+    # 鉴权配错时宁可在这里就停住：等 uvicorn 起来之后再报，用户多半已经把地址
+    # 发给别人了
+    try:
+        policy = policy_from_env()
+    except AuthError as exc:
+        typer.secho(f"鉴权配置有问题：{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
     url = f"http://{'localhost' if host in ('127.0.0.1', '0.0.0.0') else host}:{port}/"
-    if host == "0.0.0.0":
+    if host == "0.0.0.0" and isinstance(policy, OpenAccess):
         typer.secho(
-            "正在监听所有网卡：局域网内任何人都能访问这个题库，而且目前没有鉴权。",
+            "正在监听所有网卡，而且没有鉴权：局域网内任何人都能改这个题库。\n"
+            "设 QBANK_AUTH=password 与 QBANK_AUTH_PASSWORD 可以加上口令，"
+            "详见 docs/Web部署指南.md。",
             fg=typer.colors.YELLOW,
         )
+    elif not isinstance(policy, OpenAccess):
+        typer.secho(f"鉴权：{policy.label}", fg=typer.colors.BRIGHT_BLACK)
     typer.secho(f"界面地址：{url}", fg=typer.colors.GREEN, bold=True)
     typer.secho("按 Ctrl+C 停止。", fg=typer.colors.BRIGHT_BLACK)
     if open_browser and not reload:
@@ -226,7 +241,10 @@ def info() -> None:
             questions = QuestionRepo(session)
             service = QuestionService(session)
             typer.echo(f"题库目录：{context.paths.root}")
-            typer.echo(f"数据库：  {context.paths.db_file}")
+            # 描述真实的引擎，而不是 paths.db_file：设了 QBANK_DATABASE_URL 之后
+            # 那个文件路径根本没被用到，照着它排查问题会一路走偏
+            typer.echo(f"数据库：  {describe_database(str(context.engine.url))}")
+            typer.echo(f"检索：    {service.search.backend_name}")
             typer.echo(f"课程：    {len(courses)} 门")
             total = questions.count(QuestionFilter())
             typer.echo(f"题目：    {total} 道（不含子题）")

@@ -30,6 +30,10 @@ APP_AUTHOR = "qbank"
 #: 覆盖数据目录的环境变量（测试与便携模式用）
 ENV_DATA_DIR = "QBANK_DATA_DIR"
 
+#: 覆盖数据库连接串的环境变量。设了它就不再用数据目录里的 SQLite 文件，
+#: 这是本地单机模式切到 Web/Postgres 部署的唯一开关。
+ENV_DATABASE_URL = "QBANK_DATABASE_URL"
+
 
 @dataclass(frozen=True, slots=True)
 class Paths:
@@ -113,6 +117,55 @@ def default_root() -> Path:
         return Path(override).expanduser().resolve()
     dirs = PlatformDirs(appname=APP_NAME, appauthor=APP_AUTHOR, roaming=False)
     return Path(dirs.user_data_dir)
+
+
+def sqlite_url(path: Path) -> str:
+    """SQLite 文件的连接串。
+
+    >>> sqlite_url(Path("/tmp/x/qbank.db"))
+    'sqlite+pysqlite:////tmp/x/qbank.db'
+    """
+    return f"sqlite+pysqlite:///{path}"
+
+
+#: 外部平台给出的连接串需要改写的前缀。
+#:
+#: ``postgres://`` 是 Heroku / Railway / Fly 这类平台在 ``DATABASE_URL`` 里的
+#: 惯用写法，而 SQLAlchemy 2.0 直接拒收它（``Can't load plugin``）。
+#: 裸 ``postgresql://`` 能被接受，但默认挑 psycopg2——本项目装的是 psycopg 3，
+#: 于是报 ``ModuleNotFoundError: psycopg2``。两种写法都是复制粘贴来的常态，
+#: 在这里一次改对，比让每个部署的人自己去查文档划算。
+_URL_REWRITES: tuple[tuple[str, str], ...] = (
+    ("postgres://", "postgresql+psycopg://"),
+    ("postgresql://", "postgresql+psycopg://"),
+)
+
+
+def normalize_database_url(url: str) -> str:
+    """把常见的连接串写法补成 SQLAlchemy 能用的形式。
+
+    >>> normalize_database_url("postgres://u:p@h/qbank")
+    'postgresql+psycopg://u:p@h/qbank'
+    >>> normalize_database_url("postgresql://localhost/qbank")
+    'postgresql+psycopg://localhost/qbank'
+    >>> normalize_database_url("postgresql+psycopg2://localhost/qbank")
+    'postgresql+psycopg2://localhost/qbank'
+    >>> normalize_database_url("sqlite+pysqlite:///a.db")
+    'sqlite+pysqlite:///a.db'
+    """
+    stripped = url.strip()
+    for prefix, replacement in _URL_REWRITES:
+        if stripped.startswith(prefix):
+            return replacement + stripped[len(prefix) :]
+    return stripped
+
+
+def database_url() -> str:
+    """题库的连接串：环境变量优先，否则是数据目录里的 SQLite 文件。"""
+    override = os.environ.get(ENV_DATABASE_URL, "").strip()
+    if override:
+        return normalize_database_url(override)
+    return sqlite_url(get_paths().db_file)
 
 
 @lru_cache(maxsize=1)

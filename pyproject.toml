@@ -40,6 +40,9 @@ web = [
   "itsdangerous>=2.2",
 ]
 desktop = ["pywebview>=5.1"]
+# Web 部署用 Postgres 时才需要。binary 版自带 libpq，不用在机器上装 PostgreSQL
+# 客户端库——部署环境里省掉一整类「编译不过」的问题
+postgres = ["psycopg[binary]>=3.1"]
 pdf = ["playwright>=1.44"]
 dev = [
   "pytest>=8.2",
@@ -50,6 +53,7 @@ dev = [
   "pre-commit>=3.7",
   "httpx>=0.27",          # FastAPI TestClient
   "python-docx>=1.1",     # 仅测试用：构造 docx fixture
+  "psycopg[binary]>=3.1", # 仅测试用：tests/integration/test_postgres.py
 ]
 # 打包成可双击运行的应用。只有发版时才需要，不进 dev
 package = ["pyinstaller>=6.6"]

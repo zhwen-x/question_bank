@@ -79,7 +79,7 @@
     <button type="submit" class="btn" name="action" value="preview">换一批（重抽）</button>
   </form>
   <span style="flex:1"></span>
-  <a class="btn btn-quiet" href="/papers/assemble?course_id={{ course.id }}">改蓝图</a>
+  {% if can_edit %}<a class="btn btn-quiet" href="/papers/assemble?course_id={{ course.id }}">改蓝图</a>{% endif %}
 </div>
 <p class="hint">
   「换一批」会用新的随机种子重抽。生成用的是上面那个种子

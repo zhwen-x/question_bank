@@ -40,7 +40,7 @@
     <span style="flex:1"></span>
     <a class="btn btn-sm" href="/questions?course_id={{ row.course.id }}">查看题目</a>
     <a class="btn btn-sm" href="/chapters?course_id={{ row.course.id }}">章节</a>
-    <a class="btn btn-sm" href="/import?course_id={{ row.course.id }}">导入</a>
+    {% if can_edit %}<a class="btn btn-sm" href="/import?course_id={{ row.course.id }}">导入</a>{% endif %}
   </div>
 
   <details>

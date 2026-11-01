@@ -6,9 +6,11 @@
   <span class="sub">{{ papers | length }} 份</span>
 </div>
 
+{% if can_edit %}
 <div class="toolbar">
   <a class="btn btn-primary" href="/papers/assemble?course_id={{ course.id }}">按蓝图自动组卷</a>
 </div>
+{% endif %}
 
 <details class="card">
   <summary><strong>手工建一份空白卷</strong></summary>
@@ -36,7 +38,9 @@
       抽不齐时会告诉你缺哪一类、放宽哪个条件能补上几道，不会默默少出几道。
     </p>
     <p><strong>手工组卷</strong>先建一份空白卷，再从题目列表里勾选加入。</p>
+    {% if can_edit %}
     <p><a class="btn btn-primary" href="/papers/assemble?course_id={{ course.id }}">开始自动组卷</a></p>
+    {% endif %}
   </div>
 {% else %}
 <div class="card">

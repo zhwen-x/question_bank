@@ -6,6 +6,20 @@
 <title>{% block title %}{{ page_title or "题库" }}{% endblock %} · qbank</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
+{% if not can_edit %}
+{# 只读身份：把写入口一次性藏掉。
+
+   这里**刻意**用一条 CSS 规则，而不是在四十多个表单上各加一个 {% if can_edit %}：
+   界面上所有修改都是 form[method="post"]，一条规则覆盖全部，连以后新加的表单也
+   自动算进来；逐个加判断则是漏一个就留一个按不动的按钮。
+
+   这一层只是「不让人白点」。真正的拦截在 qbank.web.app 的访问控制中间件里：
+   只读身份的写请求一律 403，与模板画了什么无关。#}
+<style>
+  form[method="post"] { display: none !important; }
+  form[method="post"].readonly-keep { display: inline !important; }
+</style>
+{% endif %}
 </head>
 <body>
 <div class="app">
@@ -74,8 +88,10 @@
         {% if nav.paper_count %}<span class="count">{{ nav.paper_count }}</span>{% endif %}
       </a>
       {% endif %}
+      {% if can_edit %}
       <a class="nav-item {% if active == 'import' %}active{% endif %}"
          href="/import{% if nav.course %}?course_id={{ nav.course.id }}{% endif %}">批量导入</a>
+      {% endif %}
       <a class="nav-item {% if active == 'tags' %}active{% endif %}" href="/tags">
         <span>标签</span><span class="count">{{ nav.tag_count }}</span>
       </a>
@@ -95,10 +111,19 @@
                placeholder="搜题干、答案、解析、标签…" aria-label="搜索题目">
       </form>
       <span class="spacer" style="flex:1"></span>
-      {% if nav.course %}
+      {% if not can_edit %}
+        {# 读到一半才发现点什么都没反应，不如一开始就说清楚 #}
+        <span class="badge" title="当前身份不能修改题库">只读</span>
+      {% endif %}
+      {% if nav.course and can_edit %}
         <a class="btn btn-primary" href="/questions/new?course_id={{ nav.course.id }}">新建题目</a>
       {% endif %}
       <button type="button" class="btn btn-quiet" data-theme-toggle>外观</button>
+      {% if needs_login %}
+        <form method="post" action="/logout" class="readonly-keep" style="display:inline">
+          <button type="submit" class="btn btn-quiet" title="{{ principal.name }}（{{ principal.role_label }}）">退出</button>
+        </form>
+      {% endif %}
     </header>
 
     <main class="content {% block content_class %}{% endblock %}">

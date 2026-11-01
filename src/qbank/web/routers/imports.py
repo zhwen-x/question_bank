@@ -104,8 +104,8 @@ async def import_upload(
     一个「上传失败」的红条里信息量大得多（预览页能报出具体第几行）。
     """
     context = get_context(request)
-    data = await file.read()
     try:
+        data = await staging.read_upload(file)
         staged = staging.stage(context.paths, data, file.filename or "")
     except staging.StagingError as exc:
         return redirect_with("/import", str(exc), "error", course_id=course_id)

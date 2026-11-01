@@ -1,8 +1,12 @@
 """Alembic 运行环境。
 
-数据库地址不写在 alembic.ini 里，而是运行时从 :mod:`qbank.config` 取——这样
-``alembic upgrade head`` 和应用自身永远指向同一个库，不会出现「迁移跑在另一个
-文件上」这种事。需要指定别的库时设 ``QBANK_DATA_DIR`` 环境变量。
+数据库地址不写在 alembic.ini 里，而是运行时解析——这样 ``alembic upgrade head``
+和应用自身永远指向同一个库，不会出现「迁移跑在另一个文件上」这种事。
+
+解析顺序：调用方塞进 alembic 配置的 ``sqlalchemy.url`` 优先（``qbank.app._upgrade``
+走这条，因为 ``open_bank`` 允许打开一个和环境变量不同的库），否则按
+:func:`qbank.config.database_url` ——即 ``QBANK_DATABASE_URL``，再退回
+``QBANK_DATA_DIR`` 下的 SQLite 文件。
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from logging.config import fileConfig
 
 from alembic import context
 
-from qbank.config import get_paths
+from qbank.config import database_url, normalize_database_url
 from qbank.core.db import make_engine
 from qbank.core.models import Base
 
@@ -23,14 +27,16 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return f"sqlite+pysqlite:///{get_paths().db_file}"
+    configured = (config.get_main_option("sqlalchemy.url") or "").strip()
+    return normalize_database_url(configured) if configured else database_url()
 
 
 #: 不受 Alembic 管理的表。
 #:
-#: FTS5 虚表及其影子表（question_fts_data/_idx/_content/...）不在 Base.metadata 里，
-#: autogenerate 会把它们当作「模型里没有、库里却有」而生成 drop_table——真跑下去
-#: 会把全文索引整个删掉。必须在这里排除。
+#: 检索索引不在 Base.metadata 里，autogenerate 会把它当作「模型里没有、库里却有」
+#: 而生成 drop_table——真跑下去会把全文索引整个删掉。必须在这里排除。
+#: 两种后端都要排：SQLite 是 FTS5 虚表及其影子表
+#: （question_fts_data/_idx/_content/...），Postgres 是一张普通的 tsvector 表。
 _UNMANAGED_PREFIXES = ("question_fts", "question_search")
 
 
@@ -72,7 +78,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = make_engine(get_paths().db_file)
+    connectable = make_engine(_database_url())
     with connectable.connect() as connection:
         context.configure(
             connection=connection,

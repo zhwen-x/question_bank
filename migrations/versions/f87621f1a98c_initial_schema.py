@@ -340,12 +340,31 @@ def upgrade() -> None:
     _create_fts()
 
 
-# 全文索引虚表的 DDL 在这里**内联**而不是从 qbank.core.db 导入。
+# 全文索引的 DDL 在这里**内联**而不是从 qbank.core.db 导入。
 # 迁移必须是不可变快照：如果引用应用里的常量，哪天那个常量改了，这条历史迁移的
-# 含义就跟着变了。代价是和 qbank.core.db.FTS_DDL 有重复，由
+# 含义就跟着变了。代价是和 qbank.core.db.SEARCH_DDL 有重复，由
 # tests/integration/test_migrations.py 断言「迁移建出的 schema == init_schema 建出的」
 # 来保证两者不漂移。
+#
+# 这是整份 schema 里唯一需要分方言的地方：SQLite 用 FTS5 虚表，Postgres 用
+# tsvector + GIN。其余表两边一模一样，因为模型里没有方言专属类型。
 def _create_fts() -> None:
+    if op.get_context().dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE TABLE IF NOT EXISTS question_fts (
+                question_id TEXT PRIMARY KEY,
+                document    tsvector NOT NULL
+            )
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_question_fts_document
+                ON question_fts USING GIN (document)
+            """
+        )
+        return
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS question_search (
@@ -367,6 +386,7 @@ def _create_fts() -> None:
 
 
 def _drop_fts() -> None:
+    # 两边的表名合在一起删：IF EXISTS 对不存在的表是空操作
     op.execute("DROP TABLE IF EXISTS question_fts")
     op.execute("DROP TABLE IF EXISTS question_search")
 

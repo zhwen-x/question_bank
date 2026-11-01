@@ -49,3 +49,51 @@ jobs:
       # 「PDF 到底能不能出来」的覆盖。
       - name: Test
         run: pytest --cov --cov-report=term-missing
+
+  # Postgres 后端单独一个 job：它只在 Linux 上跑（GitHub 的 service container
+  # 只有 Linux runner 支持），而且和上面那条矩阵关心的是完全不同的东西——
+  # 那边是「三平台都能跑」，这边是「换个数据库还能不能用」。
+  postgres:
+    name: Postgres 后端
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: qbank_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[web,postgres,dev]"
+
+      # 先确认迁移在 Postgres 上跑得通。应用自己也会建表，但那条路和
+      # `alembic upgrade head` 是两条路径，部署用的是后者，所以得单独验。
+      - name: Migrate
+        env:
+          QBANK_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/qbank_test
+        run: alembic upgrade head
+
+      - name: Doctor
+        env:
+          QBANK_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/qbank_test
+        run: python -m qbank.cli doctor
+
+      - name: Test
+        env:
+          QBANK_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/qbank_test
+        run: pytest tests/integration/test_postgres.py -v
