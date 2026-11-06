@@ -29,7 +29,7 @@ CHOICE_BASE = {
     "stem": "下列代码的输出是？",
     "option_label": ["A", "B", "C"],
     "option_content": ["1024", "1023", "2048"],
-    "correct": ["B"],
+    "correct": ["1"],  # 行序号：第 1 行就是 B
     "answer": "B",
 }
 
@@ -67,7 +67,7 @@ def test_empty_option_rows_are_ignored() -> None:
             stem="甲",
             option_label=["A", "B", ""],
             option_content=["一", "二", ""],
-            correct=["A"],
+            correct=["0"],
         )
     )
     assert len(draft.payload.options) == 2
@@ -95,7 +95,7 @@ def test_single_choice_rejects_multiple_correct() -> None:
                 stem="甲",
                 option_label=["A", "B"],
                 option_content=["一", "二"],
-                correct=["A", "B"],
+                correct=["0", "1"],
             )
         )
 
@@ -107,7 +107,7 @@ def test_multiple_choice_allows_several() -> None:
             stem="甲",
             option_label=["A", "B", "C"],
             option_content=["一", "二", "三"],
-            correct=["A", "C"],
+            correct=["0", "2"],
         )
     )
     assert [o.label for o in draft.payload.options if o.is_correct] == ["A", "C"]
@@ -121,7 +121,7 @@ def test_duplicate_labels_are_reported() -> None:
                 stem="甲",
                 option_label=["A", "A"],
                 option_content=["一", "二"],
-                correct=["A"],
+                correct=["0"],
             )
         )
 
@@ -134,7 +134,7 @@ def test_too_few_options_reported() -> None:
                 stem="甲",
                 option_label=["A"],
                 option_content=["一"],
-                correct=["A"],
+                correct=["0"],
             )
         )
 
@@ -147,7 +147,7 @@ def test_option_without_content_reported() -> None:
                 stem="甲",
                 option_label=["A", "B"],
                 option_content=["一", ""],
-                correct=["A"],
+                correct=["0"],
             )
         )
     assert "没有内容" in str(caught.value)
@@ -320,3 +320,148 @@ def test_all_errors_collected_not_just_the_first() -> None:
             form(type="single_choice", stem="", option_label=["A"], option_content=["一"])
         )
     assert len(caught.value.messages) >= 2
+
+
+# ============================================ 「正确选项」的编码方式
+#
+# 这组测试来自一个真实 bug：单选题点「创建」后报「请勾选正确选项」，而用户
+# 明明选了。根因是 radio 的 value 用的是同一行里**用户可编辑的标号**——
+# 点「添加选项」新增的行，JS 会自动补上标号，radio 的 value 却补不上
+# （还是 <template> 里的空串），于是提交上去的是一个对不上任何行的值。
+#
+# 新建表单默认只给两行，而单选题通常要四个选项，所以这条路径是常态而不是边角。
+
+
+def test_picking_a_row_that_was_added_later_works() -> None:
+    """正确项落在「添加选项」新增出来的行上——就是用户报的那个场景。"""
+    draft = parse_question_form(
+        form(
+            type="single_choice",
+            stem="下列哪个是栈的特点？",
+            option_label=["A", "B", "C", "D"],
+            option_content=["先进先出", "随机访问", "后进先出", "自动排序"],
+            correct=["2"],
+        )
+    )
+    assert [o.label for o in draft.payload.options if o.is_correct] == ["C"]
+
+
+def test_selection_survives_renaming_the_label() -> None:
+    """用户把标号从 A/B 改成 甲/乙，选中的还是同一行。
+
+    这是同一个根因的另一条路径：标号一改，和它绑定的 value 就失联了。
+    改用行序号之后，标号怎么改都不影响。
+    """
+    draft = parse_question_form(
+        form(
+            type="single_choice",
+            stem="甲",
+            option_label=["甲", "乙"],
+            option_content=["一", "二"],
+            correct=["1"],
+        )
+    )
+    assert [o.label for o in draft.payload.options if o.is_correct] == ["乙"]
+
+
+def test_blank_rows_do_not_shift_the_selection() -> None:
+    """中间留了一行空的，后面行的序号不该因为被跳过而错位。
+
+    序号取的是**提交顺序**里的下标，不是过滤之后 rows 里的下标。
+    """
+    draft = parse_question_form(
+        form(
+            type="single_choice",
+            stem="甲",
+            option_label=["A", "", "C"],
+            option_content=["一", "", "三"],
+            correct=["2"],
+        )
+    )
+    assert [o.label for o in draft.payload.options] == ["A", "C"]
+    assert [o.label for o in draft.payload.options if o.is_correct] == ["C"]
+
+
+def test_an_unreadable_selection_does_not_blame_the_user() -> None:
+    """浏览器缓存了旧版表单时，提示要说「刷新」，不能说「你没选」。
+
+    这正是原 bug 最坑人的地方：报错把责任推给用户，而用户确实选了，
+    于是只能反复点那个圆点。
+    """
+    with pytest.raises(FormError) as caught:
+        parse_question_form(
+            form(
+                type="single_choice",
+                stem="甲",
+                option_label=["A", "B"],
+                option_content=["一", "二"],
+                correct=[""],  # 出事那版模板提交上来的就是这个
+            )
+        )
+    assert "请刷新" in str(caught.value)
+
+
+def test_the_three_places_agree_on_what_correct_carries() -> None:
+    """模板发什么、JS 维护什么、服务端怎么读——三处必须一致。
+
+    三者分属 Jinja、JavaScript、Python，没有编译器会发现它们对不上。
+    原 bug 就是模板发标号、JS 只补标号不补 value、服务端按标号匹配，
+    三方各自「正确」，合起来不工作。任何一方改回去都要在这里红。
+    """
+    import re
+    from pathlib import Path
+
+    import qbank
+
+    src = Path(qbank.__file__).parent
+    template = (src / "web" / "templates" / "question_form.html").read_text("utf-8")
+    script = (src / "web" / "static" / "app.js").read_text("utf-8")
+
+    # 模板：渲染出来的那一行必须用序号，不能用 option.label
+    rendered = re.search(r'name="correct" value="\{\{ ([^}]+) \}\}"', template)
+    assert rendered, "模板里找不到 correct 的 value，抽取逻辑可能失效了"
+    assert rendered.group(1).strip() == "loop.index0", (
+        f"模板把 correct 的 value 写成了 {rendered.group(1)!r}；"
+        "用选项标号会和用户可编辑的输入框绑死，增删行或改标号就会失联"
+    )
+
+    # JS：增删行之后必须重排这些 value
+    assert "querySelectorAll('input[name=\"correct\"]')" in script, (
+        "app.js 不再维护 correct 的 value 了；"
+        "从 <template> 克隆出来的新行 value 是空串，提交上去对不上任何一行"
+    )
+
+    # 服务端：按序号读
+    forms_source = (src / "web" / "forms.py").read_text("utf-8")
+    assert "int(value) for value in submitted if value.isdigit()" in forms_source, (
+        "服务端不再按行序号解读 correct 了"
+    )
+
+
+def test_validation_and_redisplay_read_correct_the_same_way() -> None:
+    """校验用的规则和出错回填用的规则必须是同一条。
+
+    这条是修 bug 时第二次被绊倒逼出来的：``_parse_options`` 改成按行序号之后，
+    ``routers/questions.py`` 里那份拷贝还按选项标号匹配，于是症状从
+    「误报没勾选」变成「报错之后四个圆点全空」——用户连自己刚选的都找不回来。
+
+    两处现在共用 :func:`correct_positions`，这个测试守着它们不再分家。
+    """
+    from qbank.web.forms import correct_positions
+    from qbank.web.routers.questions import _values_from_form
+
+    submitted = form(
+        type="single_choice",
+        stem="甲",
+        option_label=["A", "B", "C", "D"],
+        option_content=["一", "二", "三", "四"],
+        correct=["2"],
+    )
+
+    draft = parse_question_form(submitted)
+    validated = [option.is_correct for option in draft.payload.options]
+    redisplayed = [option["is_correct"] for option in _values_from_form(submitted)["options"]]
+    assert validated == redisplayed == [False, False, True, False]
+
+    positions, unreadable = correct_positions(submitted)
+    assert positions == {2} and not unreadable

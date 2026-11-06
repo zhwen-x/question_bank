@@ -22,7 +22,7 @@ from qbank.core.repo.tag import TagRepo
 from qbank.core.services.asset import AssetService
 from qbank.core.services.question import QuestionService
 from qbank.web.deps import get_context, get_session
-from qbank.web.forms import FormError, parse_question_form, split_tags
+from qbank.web.forms import FormError, correct_positions, parse_question_form, split_tags
 from qbank.web.nav import build_nav
 from qbank.web.presenters import build_rows, build_view, web_render_options
 from qbank.web.routers.assets import asset_url
@@ -278,7 +278,9 @@ def _values_from_form(form: Any) -> dict[str, Any]:
     def texts(key: str) -> list[str]:
         return [value for value in form.getlist(key) if isinstance(value, str)]
 
-    correct = {value.upper() for value in texts("correct")}
+    # 和校验走同一条规则，不再自己解读一遍（这里曾经是第二份拷贝，
+    # 结果是校验修好了、回填还按旧规则，用户选中的那一项在报错后消失）
+    correct, _ = correct_positions(form)
     labels = texts("option_label")
     contents = texts("option_content")
     hidden = set(texts("tc_hidden"))
@@ -300,7 +302,7 @@ def _values_from_form(form: Any) -> dict[str, Any]:
             {
                 "label": label,
                 "content": contents[index] if index < len(contents) else "",
-                "is_correct": label.strip().upper() in correct,
+                "is_correct": index in correct,
             }
             for index, label in enumerate(labels)
         ]

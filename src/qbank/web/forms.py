@@ -106,15 +106,51 @@ def split_tags(raw: str) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def correct_positions(form: FormData) -> tuple[set[int], bool]:
+    """表单里选中的是哪几行，以及「收到了值却读不懂」。
+
+    **这是解读 ``correct`` 字段的唯一一处**。原先校验和出错回填各写了一份
+    （一份在这里、一份在 routers/questions.py），于是修好其中一份之后，
+    另一份照旧——症状从「误报没勾选」变成「报错之后选中状态全没了」。
+    一条规则写两遍，就一定会有一遍先腐烂。
+
+    值是**行序号**而不是选项标号，原因见 :func:`_parse_options`。
+
+    >>> correct_positions(FormData([("correct", "0"), ("correct", "2")]))
+    ({0, 2}, False)
+    >>> correct_positions(FormData([]))
+    (set(), False)
+    >>> correct_positions(FormData([("correct", "")]))
+    (set(), True)
+    """
+    submitted = _texts(form, "correct")
+    positions = {int(value) for value in submitted if value.isdigit()}
+    return positions, bool(submitted) and not positions
+
+
 def _parse_options(form: FormData, kind: QuestionType, errors: FormError) -> dict[str, Any]:
     """组装选择题 payload。
 
-    正确项来自 ``correct`` 字段（单选是 radio、多选是 checkbox），值是选项标号。
-    不像导入那样需要从文本里猜——界面上点选是明确的。
+    正确项来自 ``correct`` 字段（单选是 radio、多选是 checkbox），值是**行序号**。
+
+    **为什么是序号而不是选项标号**：标号是同一行里用户可编辑的一个输入框。
+    用它当 value，两者就得时刻保持同步，而实际做不到——点「添加选项」新增的行
+    由 JS 补上标号，radio 的 value 却还是模板里的空串；手工改标号同样会让两者
+    失联。症状是「明明选了 C，提交后却说请勾选正确选项」，且报错重渲染之后
+    连选中状态都没了。序号由服务端渲染时写定，增删行时由 app.js 的 renumber()
+    维护，不依赖用户填了什么。
+
+    这里用的是**提交顺序里的下标**，不是 ``rows`` 里的下标：中间那些被跳过的
+    空行不会让后面的行错位。
     """
     labels = _texts(form, "option_label")
     contents = _texts(form, "option_content")
-    correct = {value.upper() for value in _texts(form, "correct")}
+    correct, unreadable = correct_positions(form)
+    # 收到了值却一个也解读不了，说明页面和服务端对不上（多半是浏览器缓存了
+    # 改动之前的表单）。这和「用户没选」是两回事，不能共用一句提示——否则又会
+    # 变成「我明明选了」。
+    if unreadable:
+        errors.add("这个页面是旧版本，请刷新后重新选择正确选项", field_name="correct")
 
     rows: list[dict[str, Any]] = []
     for index, (label, content) in enumerate(zip(labels, contents, strict=False)):
@@ -128,7 +164,7 @@ def _parse_options(form: FormData, kind: QuestionType, errors: FormError) -> dic
         if not content:
             errors.add(f"选项 {label} 没有内容", field_name=f"option_content.{index}")
             continue
-        rows.append({"label": label, "content": content, "is_correct": label in correct})
+        rows.append({"label": label, "content": content, "is_correct": index in correct})
 
     if len(rows) > MAX_OPTIONS:
         errors.add(f"选项不得超过 {MAX_OPTIONS} 个")

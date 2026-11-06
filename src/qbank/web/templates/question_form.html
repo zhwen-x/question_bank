@@ -130,8 +130,13 @@
     {% for option in values.options %}
       <div class="option-row" data-row>
         <span class="pick">
+          {# value 是**行序号**，不是选项标号。
+             用标号的话，这个值就依赖同一行里用户可编辑的那个输入框：点「添加选项」
+             新增的行由 JS 自动补标号，而 radio 的 value 补不上（还是模板里的空串），
+             于是「明明选了 C，却报请勾选正确选项」。手工改标号也一样会失联。
+             行序号由服务端渲染时写定、由 app.js 的 renumber() 在增删行后维护。 #}
           <input type="{{ 'radio' if values.type == 'single_choice' else 'checkbox' }}"
-                 name="correct" value="{{ option.label }}"
+                 name="correct" value="{{ loop.index0 }}"
                  {% if option.is_correct %}checked{% endif %}
                  title="标记为正确选项">
         </span>

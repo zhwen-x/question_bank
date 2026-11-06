@@ -204,6 +204,15 @@
     container.querySelectorAll("[data-row-index]").forEach((node, index) => {
       node.value = String(index);
     });
+    // 选择题「正确项」的 value 是行序号。新增的行从 <template> 克隆出来时
+    // value 是空串，删除中间一行又会让后面的序号整体前移——两种情况都必须在
+    // 这里补上，否则提交上去的是一个对不上任何行的值，服务端只能报
+    //「请勾选正确选项」，而用户明明选了。
+    //
+    // 只改 value、不碰 checked：选中状态挂在元素上，元素没动，选中就还在。
+    container.querySelectorAll('input[name="correct"]').forEach((node, index) => {
+      node.value = String(index);
+    });
   }
 
   function setupRepeater(root) {

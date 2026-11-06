@@ -40,7 +40,7 @@ CHOICE_FORM = {
     "external_id": "web-01",
     "option_label": ["A", "B", "C"],
     "option_content": ["1024", "1023", "$2^{11}$"],
-    "correct": ["B"],
+    "correct": ["1"],  # 行序号，不是选项标号
     "answer": "B",
     "explanation": "循环执行 10 次。",
 }
@@ -272,6 +272,44 @@ def test_validation_error_keeps_user_input(client: TestClient, course_id: str) -
     assert "这段题干绝不能丢" in response.text
     assert "1023" in response.text, "选项内容也要回填"
     assert "web-01" in response.text, "编号等元数据同样要回填"
+
+
+def test_validation_error_keeps_the_selected_option(client: TestClient, course_id: str) -> None:
+    """校验失败重渲染时，用户选中的那个选项必须还选着。
+
+    出 bug 的那一版这里是双重打击：先误报「请勾选正确选项」，再把四个圆点
+    全部清空——用户既不知道哪里错了，也找不回自己刚才选的那一项。
+    """
+    # 用题干为空来触发校验失败——这样错的不是选项那一块，才测得出选中状态
+    broken = {**CHOICE_FORM, "stem": ""}
+    response = client.post(f"/questions?course_id={course_id}", data=broken)
+    assert response.status_code == 422, response.text
+
+    rows = re.findall(r'name="correct" value="(\d+)"([^>]*)', response.text)
+    assert len(rows) == len(CHOICE_FORM["option_label"]), f"选项行数不对：{rows}"
+    checked = [value for value, attrs in rows if "checked" in attrs]
+    assert checked == list(CHOICE_FORM["correct"]), f"选中状态没回填：{rows}"
+
+
+def test_create_accepts_a_selection_on_a_later_row(
+    client: TestClient, course_id: str, session: Session
+) -> None:
+    """正确项落在靠后的行上。
+
+    用户报的 bug 就长这样：新建表单默认两行，单选题要四个，于是点两次
+    「添加选项」，而正确答案在新增的那两行里——提交就被误判成「没勾选」。
+    """
+    data = {
+        **CHOICE_FORM,
+        "option_label": ["A", "B", "C", "D"],
+        "option_content": ["先进先出", "随机访问", "后进先出", "自动排序"],
+        "correct": ["2"],
+    }
+    response = client.post(f"/questions?course_id={course_id}", data=data, follow_redirects=False)
+    assert response.status_code == 303, response.text
+    question_id = response.headers["location"].split("?")[0].rsplit("/", 1)[-1]
+    question = QuestionRepo(session).get_detailed(question_id)
+    assert [o["label"] for o in question.payload["options"] if o["is_correct"]] == ["C"]
 
 
 def test_validation_error_writes_nothing(
