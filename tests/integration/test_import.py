@@ -389,3 +389,44 @@ B. 选项乙 {index}
     assert plan.exact_duplicate_count == 2, "第 3、17 题已在库里，应判为完全相同"
     actions = [item.exact_duplicate is not None for item in plan.questions]
     assert actions == [True, True, False]
+
+
+# ------------------------------------------------------- 带题号的 Word 卷子
+@pytest.fixture
+def numbered_word_file(tmp_path: Path) -> Path:
+    """一份按题号排的卷子——老师手里的历年真题基本都长这样。
+
+    两种编号都造：手打的 ``1.``，以及 Word 的自动编号列表（``List Number``）。
+    后者经 pandoc 出来是 Markdown 有序列表，和手打的不是同一种文本。
+    """
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("1.【题型】单选  【难度】2  【分值】2")
+    document.add_paragraph("【题干】栈的特点是？")
+    document.add_paragraph("【选项】")
+    document.add_paragraph("A. 先进先出")
+    document.add_paragraph("*B. 后进先出")
+    document.add_paragraph("【答案】B")
+
+    document.add_paragraph("【题型】判断  【难度】1  【分值】1", style="List Number")
+    document.add_paragraph("【题干】队列是先进先出的。")
+    document.add_paragraph("【答案】正确")
+
+    path = tmp_path / "带题号的卷子.docx"
+    document.save(str(path))
+    return path
+
+
+def test_numbered_word_questions_import(numbered_word_file: Path) -> None:
+    """手打题号与 Word 自动编号都要认，且题号不进题库。"""
+    drafts = parse_source(numbered_word_file)
+    assert len(drafts) == 2, f"题号让分块出错了：{[d.stem for d in drafts]}"
+
+    single, judge = drafts
+    assert single.type is QuestionType.SINGLE_CHOICE
+    assert single.stem == "栈的特点是？", "题号渗进题干了"
+    assert [o.label for o in single.payload.options if o.is_correct] == ["B"]
+    assert judge.stem == "队列是先进先出的。"
+    # 题号只供整理，不作为信息导入
+    assert single.external_id == "" and judge.external_id == ""

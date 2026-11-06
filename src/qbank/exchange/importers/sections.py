@@ -48,10 +48,33 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
+#: 行首可以有一个**题目序号**，解析时直接丢掉，不进题库。
+#:
+#: 老师手里的历年真题是按题号排的，`1.` `2.` 是整理时的脚手架而不是题目信息。
+#: 不认它的话，`1.【题型】单选` 整行都不算标记行，报出来的是「缺少【题型】」
+#: ——而用户明明写了，只是前面多了个序号。
+#:
+#: 认这些写法：``1.`` ``1、`` ``1)`` ``1）`` ``1．`` ``1:`` ``(1)`` ``（1）``
+#: ``一、`` ``二．``。**必须带分隔符**：光一个 ``2`` 开头的行太容易是正文。
+#: 序号最多三位，顺带把 ``2024【…】`` 这种年份开头排除在外。
+#:
+#: 想把题号留在库里就写 ``【题号】``（别名：编号 / id），它存进 external_id，
+#: 重复导入时还能据此认出是同一道题。
+_SERIAL_FORMS = (
+    r"[(（]\s*\d{1,3}\s*[)）]",  # (1) （1）
+    r"\d{1,3}\s*[.、．)）:：]",  # 1. 1、 1) 1） 1． 1:
+    r"[一二三四五六七八九十]{1,3}\s*[、.．)）]",  # 一、 二．
+)
+_SERIAL_PREFIX = r"(?:" + "|".join(_SERIAL_FORMS) + r")\s*"
+
 #: 行首的 ``【标签】`` 或 ``[标签]``，后面可以紧跟内容。
 #: 标签名限长 12 字符，避免把正文里的方括号引用（如「见【附录三】的说明」）误判成标签。
+#:
+#: 序号只在**标签名被认出来**时才真的被丢掉：``3.【注】n 是正整数`` 里的 ``【注】``
+#: 不是已知标签，整行会原样当作正文，序号不会被偷偷吃掉。
 _LABEL_LINE = re.compile(
-    r"^[ \t>*]*[【\[]\s*(?P<label>[^】\]\n]{1,12}?)\s*[】\]]\s*[:：]?\s*(?P<rest>.*)$"
+    r"^[ \t>*]*(?:" + _SERIAL_PREFIX + r")?"
+    r"[【\[]\s*(?P<label>[^】\]\n]{1,12}?)\s*[】\]]\s*[:：]?\s*(?P<rest>.*)$"
 )
 
 #: 行**中间**的标签只认全角 ``【】``。
@@ -207,6 +230,8 @@ class SubBlock:
     header: str = ""
     sections: list[Section] = field(default_factory=list)
     inline: dict[str, str] = field(default_factory=dict)
+    #: 同 :attr:`QuestionBlock.unknown_labels`
+    unknown_labels: list[str] = field(default_factory=list)
 
     def get(self, key: str) -> str:
         parts = [section.text for section in self.sections if section.key == key]
@@ -235,6 +260,13 @@ class QuestionBlock:
     meta: dict[str, object] = field(default_factory=dict)
     #: 子题（仅综合题用）
     subs: list[SubBlock] = field(default_factory=list)
+    #: 行首那些**没被认出来**的方括号名字。
+    #:
+    #: 认不出来的方括号一律当正文处理，这是对的——题干里「见【附录三】」很常见。
+    #: 但代价是写错标记名时毫无反馈：`【选择题】甲` 会被整行当成正文，
+    #: 报出来的是「缺少【题型】」，而用户明明写了一个方括号。留下这份清单，
+    #: 报错时才能指出到底是哪个词没被认出来。
+    unknown_labels: list[str] = field(default_factory=list)
 
     def get(self, key: str) -> str:
         """取某个小节的文本；同名小节出现多次时按出现顺序拼接。"""
@@ -433,6 +465,11 @@ def split_blocks(text: str) -> list[QuestionBlock]:
         label_match = _LABEL_LINE.match(line)
         if label_match:
             key = canonical_label(label_match.group("label"))
+            if key is None:
+                unknown = label_match.group("label").strip()
+                target = sub if sub is not None else current
+                if unknown and unknown not in target.unknown_labels:
+                    target.unknown_labels.append(unknown)
             if key:
                 rest = label_match.group("rest")
                 if key in QUESTION_START_KEYS:

@@ -124,8 +124,11 @@ def test_every_documented_marker_is_recognized() -> None:
 
 def test_every_documented_alias_is_recognized() -> None:
     """「标记名的同义写法」里的每个别名都要真的等价。"""
-    # 按真正的水平分割线切。不能用裸 "---"：Markdown 表格的分隔行里也有它
-    section = SPEC.read_text("utf-8").split("### 标记名的同义写法")[1].split("\n---\n")[0]
+    # 切到**下一个标题**为止。早先是切到下一个 "\n---\n"，范围一直延伸到本章
+    # 末尾——中间再插一个小节，它的条目就会被当成别名行来检查。
+    section = re.split(
+        r"^#{2,3} ", SPEC.read_text("utf-8").split("### 标记名的同义写法")[1], flags=re.M
+    )[0]
     checked = 0
     for line in section.splitlines():
         if not line.strip().startswith("- "):

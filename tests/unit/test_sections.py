@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from qbank.exchange.importers.sections import canonical_label, split_blocks
 
 MARKER_DOC = """填写说明：每题以【题型】开头。
@@ -184,3 +186,67 @@ def test_empty_document_yields_nothing() -> None:
 def test_crlf_is_normalized() -> None:
     doc = "【题型】单选\r\n【题干】甲\r\n【答案】A\r\n"
     assert split_blocks(doc)[0].get("answer") == "A"
+
+
+# =========================================== 行首的题目序号
+#
+# 老师手里的历年真题是按题号排的，`1.` `2.` 是整理时的脚手架，不是题目信息。
+# 不认它的话，`1.【题型】单选` 整行都不算标记行，报出来的是「缺少【题型】」
+# ——而用户明明写了。
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["1.", "1、", "1)", "1）", "1．", "1:", "12. ", "(1)", "（1）", " 3. ", "一、", "二．"],
+)
+def test_serial_prefix_is_accepted_and_dropped(prefix: str) -> None:
+    doc = f"{prefix}【题型】单选\n【题干】栈的特点是？\n"
+    blocks = split_blocks(doc)
+    assert len(blocks) == 1, f"{prefix!r} 开头的标记行没被认出来"
+    assert blocks[0].inline["type"] == "单选"
+    assert blocks[0].get("stem") == "栈的特点是？", "序号渗进题干了"
+
+
+def test_serial_prefix_works_on_any_label_line() -> None:
+    """序号出现在哪一行都一样丢掉，不只是题目起始行。"""
+    doc = "1.【题型】单选\n2.【题干】栈的特点是？\n3.【答案】B\n"
+    block = split_blocks(doc)[0]
+    assert block.get("stem") == "栈的特点是？"
+    assert block.get("answer") == "B"
+
+
+def test_a_bare_number_is_not_a_serial() -> None:
+    """必须带分隔符。光一个数字开头的行太容易是正文。"""
+    doc = "【题型】简答\n【题干】见下表\n2024【附注】与题无关\n"
+    block = split_blocks(doc)[0]
+    assert "2024【附注】" in block.get("stem")
+
+
+def test_serial_is_kept_when_the_label_is_unknown() -> None:
+    """``3.【注】…`` 里的【注】不是已知标签，整行要原样留在正文里。
+
+    序号只在标签被认出来时才真的被丢掉，否则就是在偷吃用户的正文。
+    """
+    doc = "【题型】简答\n【题干】说明两点：\n3.【注】这里的 n 是正整数\n"
+    stem = split_blocks(doc)[0].get("stem")
+    assert "3.【注】这里的 n 是正整数" in stem
+
+
+def test_ordered_list_inside_a_stem_survives() -> None:
+    """题干里的有序列表不该被当成题号。"""
+    doc = "【题型】简答\n【题干】请回答：\n1. 什么是栈\n2. 什么是队列\n"
+    stem = split_blocks(doc)[0].get("stem")
+    assert "1. 什么是栈" in stem and "2. 什么是队列" in stem
+
+
+def test_serial_inside_a_code_fence_is_untouched() -> None:
+    doc = "【题型】编程\n【题干】实现\n```python\n1.【step】first\n```\n"
+    stem = split_blocks(doc)[0].get("stem")
+    assert "1.【step】first" in stem
+
+
+def test_keeping_the_number_requires_an_explicit_label() -> None:
+    """序号被丢掉；真想留在库里就写【题号】，它进 external_id。"""
+    doc = "1.【题型】单选\n【题号】2024-期末-01\n【题干】甲\n"
+    block = split_blocks(doc)[0]
+    assert block.inline["external_id"] == "2024-期末-01"

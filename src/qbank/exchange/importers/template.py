@@ -521,7 +521,7 @@ def block_to_draft(block: QuestionBlock) -> tuple[QuestionDraft | None, list[Blo
 
     type_text = _as_text(_value(block, "type"))
     if not type_text:
-        return fail("缺少【题型】")
+        return fail(_missing_type_message(block))
     try:
         kind = parse_question_type(type_text)
     except ValueError as exc:
@@ -580,6 +580,25 @@ def block_to_draft(block: QuestionBlock) -> tuple[QuestionDraft | None, list[Blo
         # payload 层面的错误（答案与标记冲突等）让这道题不进库，但错误已收集
         return None, errors
     return draft, errors
+
+
+def _missing_type_message(block: QuestionBlock) -> str:
+    """「缺少【题型】」，但尽量说清楚是哪里写错了。
+
+    最常见的写错法是把题型本身当成标记名：``【选择题】甲``。那个方括号不是已知
+    标记，于是整行当正文处理，用户得到的是「缺少【题型】」——而他明明写了个
+    方括号，只会觉得这程序没道理。
+
+    只在认出来**那个词确实是个题型名**时才多说一句。正文里的 ``【附录三】``
+    之类一律不提，否则提示本身会变成误导。
+    """
+    for label in block.unknown_labels:
+        try:
+            parse_question_type(label)
+        except ValueError:
+            continue
+        return f"缺少【题型】。看到了【{label}】——题型要写成【题型】{label}"
+    return "缺少【题型】"
 
 
 def _excerpt(block: QuestionBlock, limit: int = 60) -> str:

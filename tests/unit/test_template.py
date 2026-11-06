@@ -270,3 +270,28 @@ def test_errors_carry_line_numbers_and_excerpt() -> None:
     error = parse_document(doc).errors[0]
     assert error.line_number == 8
     assert "有问题的那道题" in str(error)
+
+
+# =========================================== 写错标记名时的提示
+def test_missing_type_names_the_marker_that_was_not_recognized() -> None:
+    """把题型当成标记名写（``【选择题】甲``）是最常见的写错法。
+
+    那个方括号不是已知标记，于是整行当正文，用户得到的是「缺少【题型】」——
+    而他明明写了个方括号，只会觉得这程序没道理。提示要直接说出该怎么写。
+    """
+    report = parse_document("1.【选择题】栈的特点是？\n【选项】\nA. 甲\n*B. 乙\n【答案】B\n")
+    assert not report.drafts
+    message = str(report.errors[0])
+    assert "【选择题】" in message
+    assert "【题型】选择题" in message, f"没告诉用户该怎么写：{message}"
+
+
+def test_prose_brackets_do_not_trigger_a_misleading_hint() -> None:
+    """正文里的 ``【附录三】`` 不是题型名，不能被扯进提示里。
+
+    提示一旦开始猜，就会把人往错的方向带——那比不提示更糟。
+    """
+    report = parse_document("【题干】见【附录三】的说明\n【答案】B\n")
+    # 比的是提示本身，不是 str(error)——后者还带一段定位用的原文摘录，
+    # 「附录三」出现在摘录里是对的
+    assert report.errors[0].message == "缺少【题型】", report.errors[0].message
