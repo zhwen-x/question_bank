@@ -55,6 +55,7 @@ from qbank.web.presenters import (
     build_picked_sections,
     web_render_options,
 )
+from qbank.web.query import OnFlag
 from qbank.web.routers.assets import asset_url
 from qbank.web.routers.common import flashes, redirect_with
 from qbank.web.templating import render
@@ -252,7 +253,7 @@ def paper_detail(
     paper_id: str,
     msg: str = "",
     level: str = "ok",
-    answers: bool = True,
+    answers: OnFlag = True,  # 空串要当成「没传」，理由见 qbank.web.query
     session: Session = Depends(get_session),
 ) -> HTMLResponse:
     context = get_context(request)

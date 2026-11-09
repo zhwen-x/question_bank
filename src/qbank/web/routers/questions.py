@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -25,6 +26,7 @@ from qbank.web.deps import get_context, get_session
 from qbank.web.forms import FormError, correct_positions, parse_question_form, split_tags
 from qbank.web.nav import build_nav
 from qbank.web.presenters import build_rows, build_view, web_render_options
+from qbank.web.query import OffFlag, OptionalLevel, PageNumber
 from qbank.web.routers.assets import asset_url
 from qbank.web.routers.common import flashes, redirect_with
 from qbank.web.templating import render
@@ -53,19 +55,38 @@ def _query_string(params: dict[str, Any]) -> str:
     return urlencode(flat)
 
 
+def _one_of(factory: Any, raw: Any, label: str) -> Sequence[Any]:
+    """把一个筛选值转成枚举，转不了就报 400 而不是 500。
+
+    这些值本来是从我们自己的 ``<option>`` 里选的，出现别的值只能是手改了地址栏、
+    或者一个改版之前存下的书签。``Difficulty(99)`` 直接抛 ValueError，不接住的话
+    用户得到的是一个 500 和一页 Internal Server Error——而他只是打开了个旧书签。
+    """
+    if not raw:
+        return ()
+    try:
+        return [factory(raw)]
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"筛选条件里的{label}「{raw}」不是有效值，请重新选择"
+        ) from None
+
+
 @router.get("/questions", response_class=HTMLResponse)
 def question_list(
     request: Request,
     course_id: str = "",
     chapter_id: str = "",
-    unchaptered: bool = False,
+    unchaptered: OffFlag = False,
     q: str = "",
     type: str = "",  # noqa: A002 - 查询参数名就叫 type，改了会破坏书签
-    difficulty: int | None = None,
+    # 这几个不能写成裸的 int / bool：筛选表单把「全部」提交成空串，
+    # 而空串过不了 int/bool 的校验——默认状态下点一次「筛选」就是 422
+    difficulty: OptionalLevel = None,
     status: str = "",
     tag: list[str] = Query(default=[]),
-    page: int = 1,
-    select: bool = False,
+    page: PageNumber = 1,
+    select: OffFlag = False,
     add_to: str = "",
     section_id: str = "",
     msg: str = "",
@@ -99,9 +120,9 @@ def question_list(
         course_id=course_id,
         chapter_ids=chapter_ids,
         include_unchaptered=unchaptered,
-        types=[QuestionType(type)] if type else (),
-        difficulties=[Difficulty(difficulty)] if difficulty else (),
-        statuses=[QuestionStatus(status)] if status else (),
+        types=_one_of(QuestionType, type, "题型"),
+        difficulties=_one_of(Difficulty, difficulty, "难度"),
+        statuses=_one_of(QuestionStatus, status, "状态"),
         all_tag_ids=[found.id for found in selected_tags],
     )
     ordered_ids: list[str] | None = None

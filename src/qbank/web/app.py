@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -85,6 +86,24 @@ def create_app(context: AppContext | None = None, policy: AuthPolicy | None = No
     def http_error(request: Request, exc: StarletteHTTPException) -> HTMLResponse:
         """错误页也套同一套布局——弹一个纯文本 404 很让人不知所措。"""
         return error_page(request, exc.status_code, exc.detail or "")
+
+    @application.exception_handler(RequestValidationError)
+    def invalid_request(request: Request, exc: RequestValidationError) -> HTMLResponse:
+        """参数校验失败也要落到同一张错误页。
+
+        FastAPI 默认吐的是一坨原始 JSON：
+
+        .. code-block:: text
+
+            {"detail":[{"type":"int_parsing","loc":["query","difficulty"], ...}]}
+
+        这东西直接出现在浏览器里，对界面用户毫无意义——它既没说哪里错了，
+        也没给回去的路。这里改成应用自己的错误页，并把出问题的参数名说出来。
+        """
+        fields = sorted({str(error["loc"][-1]) for error in exc.errors() if error.get("loc")})
+        named = "、".join(fields)
+        detail = f"这几个参数的值不对：{named}。" if named else "请求参数不对。"
+        return error_page(request, 400, detail + "请回到列表页重新选择筛选条件。")
 
     return application
 
